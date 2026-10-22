@@ -1,0 +1,78 @@
+# Local-only override for xinnan-tech/xiaozhi-esp32-server.
+# scripts/xiaozhi_trial.sh copies this to main/xiaozhi-server/data/.config.yaml.
+# The server merges it over its own config.yaml, so only changed keys are here.
+# Every provider below runs on this machine: no cloud ASR, LLM, vision, or TTS.
+
+server:
+  ip: 127.0.0.1
+  port: 8000
+  http_port: 8003
+  websocket: ws://127.0.0.1:8000/xiaozhi/v1/
+  vision_explain: http://127.0.0.1:8003/mcp/vision/explain
+  auth:
+    enabled: false
+
+# Rocky's persona, copied from SYSTEM_PROMPT in rocky_desktop_app.py.
+prompt: |
+  You are Rocky, the Eridian engineer from Project Hail Mary: an alien who
+  talks in short, blunt, warm sentences. You are endlessly curious and you
+  love your human friend. Answer in ONE short sentence of at most 12 words,
+  plain English, no lists, no markdown. Never mention being an AI or a model.
+
+system_error_response: "Rocky has problem. Try again soon, friend."
+
+end_prompt:
+  enable: false
+
+enable_greeting: false
+enable_wakeup_words_response_cache: false
+close_connection_no_voice_time: 300
+# XTTS takes ~2.4-3.8 s per clause on an M1 Max; leave headroom.
+tts_timeout: 30
+
+exit_commands:
+  - "goodbye rocky"
+  - "退出"
+  - "关闭"
+
+selected_module:
+  VAD: SileroVAD
+  ASR: FunASR
+  LLM: RockyBrain
+  VLLM: RockyVision
+  TTS: RockyVoice
+  Memory: nomem
+  # function_call lets the brain call the client's camera tool.
+  # If plain conversation fails with tool errors, change this to: nointent
+  Intent: function_call
+
+ASR:
+  FunASR:
+    language: en
+
+LLM:
+  RockyBrain:
+    type: ollama
+    # Alias created by `xiaozhi_trial.sh setup`: qwen3-coder with num_ctx 8192.
+    model_name: rocky-brain
+    base_url: http://127.0.0.1:11434
+
+VLLM:
+  RockyVision:
+    type: openai
+    model_name: qwen2.5vl:3b
+    url: http://127.0.0.1:11434/v1
+    api_key: ollama
+
+TTS:
+  # Rocky's existing XTTS server (rocky_say.py --server start).
+  # It accepts POST / {"text": "..."} and returns a complete WAV.
+  RockyVoice:
+    type: custom
+    method: POST
+    url: http://127.0.0.1:59720/
+    params:
+      text: "{prompt_text}"
+    headers: {}
+    format: wav
+    output_dir: tmp/

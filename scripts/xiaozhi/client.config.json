@@ -1,0 +1,19 @@
+{
+  "SYSTEM_OPTIONS": {
+    "NETWORK": {
+      "OTA_VERSION_URL": "http://127.0.0.1:8003/xiaozhi/ota/",
+      "AUTHORIZATION_URL": "http://127.0.0.1:8003/"
+    }
+  },
+  "WAKE_WORD_OPTIONS": {
+    "USE_WAKE_WORD": false
+  },
+  "CAMERA": {
+    "Local_VL_url": "http://127.0.0.1:11434/v1",
+    "VLapi_key": "ollama",
+    "models": "qwen2.5vl:3b"
+  },
+  "AEC_OPTIONS": {
+    "ENABLED": true
+  }
+}

@@ -126,7 +126,9 @@ Tasks:
   [`docs/OPEN_SOURCE_OPTIONS.md`](docs/OPEN_SOURCE_OPTIONS.md). Evaluate
   py-xiaozhi as the editable app, Xiaozhi Desktop as a UX-only comparison, and
   Open WebUI as the local-Ollama voice benchmark. Do not build a new audio core
-  until this fit check is complete.
+  until this fit check is complete. The py-xiaozhi trial is scripted:
+  `./scripts/xiaozhi_trial.sh setup|server|client|doctor`; see
+  [`docs/XIAOZHI_TRIAL.md`](docs/XIAOZHI_TRIAL.md).
 - [ ] Verify target Mac support, offline/local Ollama behavior, AEC/barge-in,
   current Rocky voice/eyes integration, camera privacy, and source/license
   terms for any candidate.

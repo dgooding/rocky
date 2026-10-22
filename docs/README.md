@@ -11,6 +11,7 @@
 | [`REALTIME_PLAN.md`](REALTIME_PLAN.md) | Target design, engine options, latency budget, phases, acceptance criteria |
 | [`RESEARCH.md`](RESEARCH.md) | Verified vendor claims, local benchmarks, caveats |
 | [`OPEN_SOURCE_OPTIONS.md`](OPEN_SOURCE_OPTIONS.md) | Reuse-first survey of open-source assistant apps and fit checks |
+| [`XIAOZHI_TRIAL.md`](XIAOZHI_TRIAL.md) | Hands-on, fully local trial of py-xiaozhi + xiaozhi-esp32-server with Rocky's voice |
 | [`ROADMAP.md`](ROADMAP.md) | Phased checklist and decision log |
 | [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) | Camera, audio, Python, Ollama, app bundle, assets |
 | [`CI.md`](CI.md) | CI workflow and local checks |

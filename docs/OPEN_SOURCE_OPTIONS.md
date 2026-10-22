@@ -10,7 +10,10 @@ Do not start by building another voice-agent stack. First run a short proof of
 fit on:
 
 1. **[py-xiaozhi](https://github.com/huangjunsen0406/py-xiaozhi)** as the
-   editable, cross-platform desktop-app candidate.
+   editable, cross-platform desktop-app candidate, paired with the self-hosted
+   **[xiaozhi-esp32-server](https://github.com/xinnan-tech/xiaozhi-esp32-server)**
+   so nothing leaves the machine. A ready-to-run kit for this is in
+   [`XIAOZHI_TRIAL.md`](XIAOZHI_TRIAL.md).
 2. **[Xiaozhi Desktop](https://xiaozhi.junsen.online)** as a ready-to-run
    interaction/UX comparison. Its public
    [release repository](https://github.com/huangjunsen0406/xiaozhi-desktop-release)
@@ -29,7 +32,8 @@ everything in-house.
 
 | Project | Ready-made capabilities in its public docs | Fit and limitations for Rocky | Recommendation |
 |---|---|---|---|
-| [py-xiaozhi](https://github.com/huangjunsen0406/py-xiaozhi) | MIT-licensed Python app/framework; PySide6/QML GUI and CLI; async audio pipeline, WebSocket/MQTT, vision, plugins, offline Sherpa-ONNX wake word; README lists macOS, Windows, and Linux. | Closest editable desktop foundation found. Its README also calls for a stable internet connection for AI/online features and does not establish a fully local Ollama brain or Rocky-voice path. The stated sub-20 ms processing is a project claim, not an independent end-to-end measurement. | **Test first as a source-based app.** Verify local-only operation, runtime/provider extension points, camera privacy, and audio interruption before choosing it. |
+| [py-xiaozhi](https://github.com/huangjunsen0406/py-xiaozhi) | MIT-licensed Python app/framework; PySide6/QML GUI and CLI; async audio pipeline, WebSocket/MQTT, vision, plugins, offline Sherpa-ONNX wake word, optional AEC; README lists macOS, Windows, and Linux. | Closest editable desktop foundation found. It is a **client only**: its default config sends audio to the hosted xiaozhi service (`api.tenclass.net`), and its camera defaults to a hosted vision API. Both are configurable to local endpoints. The stated sub-20 ms processing is a project claim, not an independent end-to-end measurement. | **Test first, with the self-hosted server below.** Run [`XIAOZHI_TRIAL.md`](XIAOZHI_TRIAL.md). |
+| [xiaozhi-esp32-server](https://github.com/xinnan-tech/xiaozhi-esp32-server) | MIT-licensed, actively maintained backend for the xiaozhi protocol. Pluggable providers include Silero VAD, local SenseVoice/Sherpa/Vosk speech-to-text, an Ollama LLM provider, OpenAI-compatible vision, and a `custom` HTTP TTS provider. | Makes py-xiaozhi fully local. Its `custom` TTS posts `{"text": ...}` and expects audio back, which matches Rocky's existing XTTS server on port 59720 without new code. Defaults are Chinese cloud providers, so it needs an override config. It reaches Ollama through the OpenAI-compatible `/v1` API, which cannot set `num_ctx`, so `qwen3-coder` needs an 8k-context alias. | **Use as the local backend for the py-xiaozhi trial.** |
 | [Xiaozhi Desktop](https://xiaozhi.junsen.online) | The related py-xiaozhi README describes an Electron desktop client with AEC, Live2D, floating windows, and Windows/macOS installers. | Appears closest to a ready-to-run voice/avatar experience. The public release repo found contains static download-site files rather than client source; its code license and backend/local-model fit were not established. | **Run as a black-box UX comparison only.** Do not copy or redistribute the client until source and license are verified. |
 | [Open WebUI](https://github.com/open-webui/open-webui) | Self-hosted interface for Ollama and OpenAI-compatible APIs; PWA; voice/video calls with multiple STT and TTS backends. | Strong local-model and provider coverage, but it is a general AI UI rather than an animated desktop companion. Its current [license](https://github.com/open-webui/open-webui/blob/main/LICENSE) imposes branding-preservation conditions, so it is not a straightforward white-label Rocky UI. | **Use as a benchmark or personal tool**, not as the assumed rebrandable foundation. Review the exact license before any reuse. |
 | [LiraVtuber](https://github.com/Rukafuu/LiraVtuber) | MIT-licensed, desktop-first Python assistant with voice, memory, GUI, Live2D/VTube Studio, multiple LLM/TTS providers, and tests. The repository was updated 2026-10-20. | Strong visual/character overlap, but the README targets Windows desktop. The documented voice/provider paths include hosted services and XTTS via Colab; a local Ollama path and macOS support were not established. It also includes broad PC automation, media, Discord, and WhatsApp features beyond Rocky's goal. | **Reference for UI/character patterns**, not a drop-in macOS/local-first replacement without a compatibility and scope review. |
@@ -90,7 +94,15 @@ the complete upstream and dependency licenses.
 ## Sources
 
 - [py-xiaozhi README](https://github.com/huangjunsen0406/py-xiaozhi/blob/main/README.md)
-  and [MIT license](https://github.com/huangjunsen0406/py-xiaozhi/blob/main/LICENSE)
+  and [MIT license](https://github.com/huangjunsen0406/py-xiaozhi/blob/main/LICENSE);
+  default endpoints in
+  [`src/utils/config_manager.py`](https://github.com/huangjunsen0406/py-xiaozhi/blob/main/src/utils/config_manager.py)
+- [xiaozhi-esp32-server](https://github.com/xinnan-tech/xiaozhi-esp32-server)
+  [MIT license](https://github.com/xinnan-tech/xiaozhi-esp32-server/blob/main/LICENSE),
+  [`config.yaml`](https://github.com/xinnan-tech/xiaozhi-esp32-server/blob/main/main/xiaozhi-server/config.yaml),
+  [custom TTS provider](https://github.com/xinnan-tech/xiaozhi-esp32-server/blob/main/main/xiaozhi-server/core/providers/tts/custom.py),
+  [Ollama provider](https://github.com/xinnan-tech/xiaozhi-esp32-server/blob/main/main/xiaozhi-server/core/providers/llm/ollama/ollama.py),
+  and [deployment guide](https://github.com/xinnan-tech/xiaozhi-esp32-server/blob/main/docs/Deployment.md)
 - [Xiaozhi Desktop site](https://xiaozhi.junsen.online) and
   [public release-site repository](https://github.com/huangjunsen0406/xiaozhi-desktop-release)
 - [Open WebUI README](https://github.com/open-webui/open-webui/blob/main/README.md)
