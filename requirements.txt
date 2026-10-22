@@ -1,0 +1,23 @@
+# Rocky desktop app — Python 3.11 only (TTS caps at <3.12)
+#
+# Keep numpy < 2: gruut (a TTS dependency) requires it. Current OpenCV wheels
+# can silently upgrade numpy and break XTTS on the next restart.
+numpy==1.26.4
+opencv-python-headless==4.11.0.86
+
+# Voice clone / TTS server
+TTS==0.22.0
+transformers==4.44.0
+torch==2.5.1
+torchaudio==2.5.1
+
+# Speech-to-text
+faster-whisper==1.2.1
+
+# Audio I/O and playback
+sounddevice==0.5.6
+soundfile==0.14.0
+pygame==2.6.1
+
+# Utility
+scipy==1.17.1
