@@ -1,0 +1,27 @@
+unit: voice-service
+bindings:
+  - type: route-declaration
+    name: "GET /health and POST /"
+    source_loc: "rocky_say.py:291"
+    target: "Generated HTTP handler H"
+    must_appear_in_target: true
+    notes: "The persistent synthesis server binds only to 127.0.0.1:59720."
+  - type: convention
+    name: "argparse CLI and --server lifecycle commands"
+    source_loc: "rocky_say.py:556"
+    target: "main"
+    must_appear_in_target: true
+    notes: "Accepts text/file/stdin, voice model, speed, raw transform mode, output path, and server management."
+runtime_config:
+  - key: "ROCKY_SPEED"
+    source_loc: "rocky_say.py:288"
+    source: env
+    default_value: "1.25"
+    must_appear_in_target: true
+    notes: "Playback/synthesis speed used by the persistent XTTS server."
+  - key: "SERVER_PORT"
+    source_loc: "rocky_say.py:68"
+    source: code
+    default_value: "59720"
+    must_appear_in_target: true
+    notes: "Loopback voice-server port used by desktop and browser clients."

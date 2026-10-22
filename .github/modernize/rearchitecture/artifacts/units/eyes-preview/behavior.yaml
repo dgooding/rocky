@@ -1,0 +1,17 @@
+unit: eyes-preview
+side_effects:
+  - source_loc: "rocky_eyes.py:202"
+    effect: "Creates the requested output directory and writes one PNG per emotion plus speaking/blink examples."
+    must_preserve: true
+branches:
+  - source_loc: "rocky_eyes.py:247"
+    condition: "--selftest DIR is supplied"
+    behavior: "Renders preview images and prints generated paths."
+    must_preserve: true
+  - source_loc: "rocky_eyes.py:247"
+    condition: "--selftest DIR is omitted"
+    behavior: "Prints CLI help without rendering."
+    must_preserve: true
+error_paths: []
+concurrency:
+  model: sync

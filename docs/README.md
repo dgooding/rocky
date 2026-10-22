@@ -5,10 +5,12 @@
 | [`../HANDOFF.md`](../HANDOFF.md) | Current agent handoff: state, constraints, phases, next action |
 | [`../PROJECT.md`](../PROJECT.md) | The full handbook: status, setup, architecture, configuration, performance, gotchas, licensing, FAQ |
 | [`ARCHITECTURE.md`](ARCHITECTURE.md) | Process/thread model, pipeline, seams for the real-time redesign |
+| [Architecture analysis artifacts](../.github/modernize/rearchitecture/artifacts/architecture_index.md) | Source-anchored unit, behavior, integration, and technology analysis |
 | [`SETUP.md`](SETUP.md) | Install, assets, Ollama, app bundle, permissions, verification |
 | [`LATENCY.md`](LATENCY.md) | Measured numbers, reproduction scripts, `inference_stream` failure |
 | [`REALTIME_PLAN.md`](REALTIME_PLAN.md) | Target design, engine options, latency budget, phases, acceptance criteria |
 | [`RESEARCH.md`](RESEARCH.md) | Verified vendor claims, local benchmarks, caveats |
+| [`OPEN_SOURCE_OPTIONS.md`](OPEN_SOURCE_OPTIONS.md) | Reuse-first survey of open-source assistant apps and fit checks |
 | [`ROADMAP.md`](ROADMAP.md) | Phased checklist and decision log |
 | [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) | Camera, audio, Python, Ollama, app bundle, assets |
 | [`CI.md`](CI.md) | CI workflow and local checks |

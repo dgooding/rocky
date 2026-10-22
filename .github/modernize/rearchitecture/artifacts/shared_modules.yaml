@@ -1,0 +1,42 @@
+modules:
+  - name: voice-service-module
+    kind: utility
+    source_loc: "rocky_say.py:55"
+    used_by_units:
+      - desktop-companion
+      - browser-companion
+    fields:
+      - name: rocky_transform
+        type: "function(text) -> str"
+      - name: generate_via_server
+        type: "function(text) -> bytes | None"
+      - name: server_start
+        type: "function() -> None"
+      - name: SERVER_PORT
+        type: "int"
+      - name: LOGS_DIR
+        type: "str"
+    god_class: false
+    split_candidate: false
+    migration_strategy: wrap
+    notes: "The desktop and browser entrypoints both import this module; it also owns the voice CLI/server runtime."
+
+  - name: eyes-renderer
+    kind: utility
+    source_loc: "rocky_eyes.py:79"
+    used_by_units:
+      - desktop-companion
+      - eyes-preview
+    fields:
+      - name: Eyes
+        type: "class"
+      - name: mood_for
+        type: "function(text: str) -> str"
+      - name: EMOTIONS
+        type: "tuple[str, ...]"
+      - name: PRESETS
+        type: "dict[str, dict[str, float]]"
+    god_class: false
+    split_candidate: false
+    migration_strategy: copy
+    notes: "The desktop uses the renderer and mood presets; the standalone self-test exercises the same public module."

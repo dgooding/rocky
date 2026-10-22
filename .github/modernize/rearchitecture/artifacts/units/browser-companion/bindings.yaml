@@ -1,0 +1,33 @@
+unit: browser-companion
+bindings:
+  - type: route-declaration
+    name: "GET / and /index.html"
+    source_loc: "app.py:185"
+    target: "Handler.do_GET"
+    must_appear_in_target: true
+    notes: "Serves the embedded PAGE document."
+  - type: route-declaration
+    name: "GET /status; POST /warm and /say"
+    source_loc: "app.py:185"
+    target: "Handler.do_GET and Handler.do_POST"
+    must_appear_in_target: true
+    notes: "Loopback HTTP API used by the embedded browser page."
+  - type: convention
+    name: "argparse command-line entrypoint"
+    source_loc: "app.py:243"
+    target: "main"
+    must_appear_in_target: true
+    notes: "Configures bind host, port, and optional background warmup."
+runtime_config:
+  - key: "host"
+    source_loc: "app.py:245"
+    source: code
+    default_value: "127.0.0.1"
+    must_appear_in_target: true
+    notes: "HTTP bind address."
+  - key: "port"
+    source_loc: "app.py:245"
+    source: code
+    default_value: "8765"
+    must_appear_in_target: true
+    notes: "HTTP listen port."

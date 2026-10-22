@@ -1,0 +1,15 @@
+unit: voice-service
+commit: false
+candidate_splits:
+  - id: "rocky_say.py:263-382"
+    drivers: [lifecycle_split, execution_model_split]
+    rationale: "Persistent server startup, detached process tracking, health polling, and stop/status commands have a separate lifecycle from one-shot synthesis."
+    source_slice:
+      file: rocky_say.py
+      lines: [263, 382]
+  - id: "rocky_say.py:384-510"
+    drivers: [protocol_split, concern_split]
+    rationale: "The module contains separate server, standalone XTTS, YourTTS, and RVC generation paths with distinct dependencies and failure semantics."
+    source_slice:
+      file: rocky_say.py
+      lines: [384, 510]

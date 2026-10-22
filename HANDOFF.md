@@ -122,6 +122,14 @@ Read order for a new agent:
 
 Tasks:
 
+- [ ] **First:** complete the reuse-first app bake-off in
+  [`docs/OPEN_SOURCE_OPTIONS.md`](docs/OPEN_SOURCE_OPTIONS.md). Evaluate
+  py-xiaozhi as the editable app, Xiaozhi Desktop as a UX-only comparison, and
+  Open WebUI as the local-Ollama voice benchmark. Do not build a new audio core
+  until this fit check is complete.
+- [ ] Verify target Mac support, offline/local Ollama behavior, AEC/barge-in,
+  current Rocky voice/eyes integration, camera privacy, and source/license
+  terms for any candidate.
 - [ ] Add timestamps: speech-end, STT-final, LLM-first-token, TTS-first-byte,
   first-audio-played, barge-in-stop.
 - [ ] Write one JSONL trace per turn; compute p50/p95 over 20 turns.
@@ -133,6 +141,9 @@ Tasks:
   - OpenAI Realtime (`gpt-realtime`, custom voice, semantic VAD)
   - Pipecat cascade: Deepgram Nova-3 or Cartesia Ink 2 → local `qwen3-coder`
     → Cartesia Sonic 3.6 or ElevenLabs Flash v2.5
+
+Run the provider A/B only after the app reuse gate says that no ready-made
+candidate meets the required platform/privacy/UX constraints.
 
 **Exit:** measured baseline; primary engine chosen; fallback chosen.
 

@@ -1,0 +1,9 @@
+unit: eyes-preview
+bindings:
+  - type: convention
+    name: "argparse --selftest DIR"
+    source_loc: "rocky_eyes.py:245"
+    target: "main"
+    must_appear_in_target: true
+    notes: "Runs the standalone eye reference-image generator."
+runtime_config: []

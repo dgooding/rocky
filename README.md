@@ -97,6 +97,7 @@ OpenAI-compatible or Anthropic brains are supported via CLI flags.
 | [`docs/LATENCY.md`](docs/LATENCY.md) | Measured latency and how to reproduce it |
 | [`docs/REALTIME_PLAN.md`](docs/REALTIME_PLAN.md) | Research-backed plan for sub-second speech, barge-in, and continuous vision |
 | [`docs/RESEARCH.md`](docs/RESEARCH.md) | Verified sources, model comparison, and caveats |
+| [`docs/OPEN_SOURCE_OPTIONS.md`](docs/OPEN_SOURCE_OPTIONS.md) | Reuse-first survey of existing open-source assistant apps |
 | [`docs/ROADMAP.md`](docs/ROADMAP.md) | Phased implementation plan |
 | [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) | Camera, audio, Ollama, TTS, and packaging fixes |
 | [`docs/GUIDE.md`](docs/GUIDE.md) | Upstream voice-script guide (grammar transform, RVC, etc.) |

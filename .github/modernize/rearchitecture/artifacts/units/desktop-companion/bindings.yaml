@@ -1,0 +1,15 @@
+unit: desktop-companion
+bindings:
+  - type: convention
+    name: "argparse command-line entrypoint"
+    source_loc: "rocky_desktop_app.py:771"
+    target: "main"
+    must_appear_in_target: true
+    notes: "Controls model/provider selection, camera/STT settings, self-test, snapshot, and echo mode."
+runtime_config:
+  - key: "BRAIN_API_KEY"
+    source_loc: "rocky_desktop_app.py:782"
+    source: env
+    default_value: ""
+    must_appear_in_target: true
+    notes: "Fallback source for hosted brain provider credentials."

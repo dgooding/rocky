@@ -1,0 +1,21 @@
+unit: desktop-companion
+commit: false
+candidate_splits:
+  - id: "rocky_desktop_app.py:130-234"
+    drivers: [concern_split, execution_model_split]
+    rationale: "Microphone capture, camera snapshots, and batch transcription have different device lifecycles and failure paths from UI rendering."
+    source_slice:
+      file: rocky_desktop_app.py
+      lines: [130, 234]
+  - id: "rocky_desktop_app.py:236-426"
+    drivers: [protocol_split, concern_split]
+    rationale: "Brain chat streaming and vision payload formatting support multiple provider protocols and are distinct from desktop event handling."
+    source_slice:
+      file: rocky_desktop_app.py
+      lines: [236, 426]
+  - id: "rocky_desktop_app.py:503-589"
+    drivers: [execution_model_split, lifecycle_split]
+    rationale: "Sentence production, concurrent TTS prefetch, blocking playback, and job dispatch form a pipeline with distinct cancellation and lifecycle concerns."
+    source_slice:
+      file: rocky_desktop_app.py
+      lines: [503, 589]

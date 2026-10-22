@@ -1,0 +1,49 @@
+unit: desktop-companion
+side_effects:
+  - source_loc: "rocky_desktop_app.py:105"
+    effect: "Writes the most recently played WAV to rocky_say.LOGS_DIR/desk_last.wav."
+    must_preserve: true
+  - source_loc: "rocky_desktop_app.py:551"
+    effect: "Writes a successful camera snapshot to rocky_say.LOGS_DIR/last_look.jpg for debugging."
+    must_preserve: false
+  - source_loc: "rocky_desktop_app.py:626"
+    effect: "Starts background worker and warmup threads for voice, STT, and brain services."
+    must_preserve: true
+branches:
+  - source_loc: "rocky_desktop_app.py:655"
+    condition: "F1 key down/up or F2 toggle"
+    behavior: "Captures microphone audio and queues a transcription job when recording stops."
+    must_preserve: true
+  - source_loc: "rocky_desktop_app.py:660"
+    condition: "F3 or Space with an empty text buffer"
+    behavior: "Queues one explicit camera-look request."
+    must_preserve: true
+  - source_loc: "rocky_desktop_app.py:662"
+    condition: "Non-empty typed input followed by Enter"
+    behavior: "Queues the trimmed text and clears the input buffer."
+    must_preserve: true
+  - source_loc: "rocky_desktop_app.py:568"
+    condition: "Transcription returns an empty string"
+    behavior: "Displays 'didn't catch that' and returns to IDLE."
+    must_preserve: true
+  - source_loc: "rocky_desktop_app.py:577"
+    condition: "Brain is unavailable"
+    behavior: "Speaks the input back using Rocky's grammar transform instead of failing the turn."
+    must_preserve: true
+  - source_loc: "rocky_desktop_app.py:546"
+    condition: "Camera is disabled or snapshot/vision fails"
+    behavior: "Displays an explanatory note and returns to IDLE without a spoken vision response."
+    must_preserve: true
+error_paths:
+  - source_loc: "rocky_desktop_app.py:586"
+    trigger: "An unexpected exception occurs while processing a queued job."
+    outcome: "Shows an error note, logs the exception, and returns the UI to IDLE."
+    contract: "No network status; user-visible note begins with 'error: '."
+    must_preserve: true
+  - source_loc: "rocky_desktop_app.py:116"
+    trigger: "pygame audio device initialization or playback fails."
+    outcome: "Shows and logs an audio device error; the worker continues."
+    contract: "Internal playback failure is reported in the UI note."
+    must_preserve: true
+concurrency:
+  model: thread-pool

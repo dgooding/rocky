@@ -1,0 +1,72 @@
+units:
+  - name: desktop-companion
+    trigger: cli
+    trigger_detail: "Launch rocky_desktop_app.py; user actions arrive through keyboard, microphone, and optional camera."
+    source_anchors:
+      - path: rocky_desktop_app.py
+        line: 771
+    exported_signature: []
+    dynamic_entrypoints: []
+    depends_on:
+      - unit: voice-service
+        via: "rocky_say.rocky_transform, generate_via_server, server_start, SERVER_PORT, and LOGS_DIR"
+    shared_refs:
+      - module: voice-service-module
+        used_fields:
+          - rocky_transform
+          - generate_via_server
+          - server_start
+          - SERVER_PORT
+          - LOGS_DIR
+      - module: eyes-renderer
+        used_fields:
+          - Eyes
+          - mood_for
+          - EMOTIONS
+          - PRESETS
+
+  - name: browser-companion
+    trigger: api
+    trigger_detail: "Browser UI served by app.py; GET / and /status; POST /warm and /say."
+    source_anchors:
+      - path: app.py
+        line: 243
+    exported_signature: []
+    dynamic_entrypoints: []
+    depends_on:
+      - unit: voice-service
+        via: "rocky_say.rocky_transform, generate_via_server, and SERVER_PORT"
+    shared_refs:
+      - module: voice-service-module
+        used_fields:
+          - rocky_transform
+          - generate_via_server
+          - SERVER_PORT
+
+  - name: voice-service
+    trigger: cli
+    trigger_detail: "rocky_say.py text/file/stdin synthesis options and --server start|stop|status."
+    source_anchors:
+      - path: rocky_say.py
+        line: 556
+    exported_signature: []
+    dynamic_entrypoints: []
+    depends_on: []
+    shared_refs: []
+
+  - name: eyes-preview
+    trigger: cli
+    trigger_detail: "rocky_eyes.py --selftest DIR renders emotion reference images."
+    source_anchors:
+      - path: rocky_eyes.py
+        line: 245
+    exported_signature: []
+    dynamic_entrypoints: []
+    depends_on: []
+    shared_refs:
+      - module: eyes-renderer
+        used_fields:
+          - Eyes
+          - mood_for
+          - EMOTIONS
+          - PRESETS

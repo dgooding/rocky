@@ -1,0 +1,50 @@
+unit: browser-companion
+side_effects:
+  - source_loc: "app.py:208"
+    effect: "Starts voice-model warmup on a daemon thread when the model is requested."
+    must_preserve: true
+  - source_loc: "app.py:234"
+    effect: "Returns synthesized WAV bytes and Rocky-said/input metadata to the browser."
+    must_preserve: true
+branches:
+  - source_loc: "app.py:185"
+    condition: "GET path is / or /index.html"
+    behavior: "Returns the embedded browser UI."
+    must_preserve: true
+  - source_loc: "app.py:190"
+    condition: "GET path is /status"
+    behavior: "Reports voice readiness/loading and voice name."
+    must_preserve: true
+  - source_loc: "app.py:199"
+    condition: "POST path is /warm"
+    behavior: "Starts asynchronous warmup and returns a loading response."
+    must_preserve: true
+  - source_loc: "app.py:212"
+    condition: "POST path is not /say"
+    behavior: "Returns a JSON 404 for unknown routes."
+    must_preserve: true
+  - source_loc: "app.py:217"
+    condition: "POST /say has missing or blank text"
+    behavior: "Returns JSON 400 with {error: 'empty text'}."
+    must_preserve: true
+  - source_loc: "app.py:224"
+    condition: "Voice model is not ready"
+    behavior: "Starts warmup and returns 503 so the browser can wait and retry."
+    must_preserve: true
+  - source_loc: "app.py:230"
+    condition: "Voice synthesis returns no WAV"
+    behavior: "Returns JSON 502 with a log-file hint."
+    must_preserve: true
+error_paths:
+  - source_loc: "app.py:26"
+    trigger: "The local voice health endpoint cannot be reached."
+    outcome: "Reports voice as not ready; browser shows asleep/loading state."
+    contract: "GET /status still returns 200 JSON with ready=false."
+    must_preserve: true
+  - source_loc: "app.py:204"
+    trigger: "Request body is malformed JSON."
+    outcome: "Body is treated as an empty object and /say reports missing text."
+    contract: "400 JSON {error: 'empty text'}."
+    must_preserve: true
+concurrency:
+  model: thread-pool

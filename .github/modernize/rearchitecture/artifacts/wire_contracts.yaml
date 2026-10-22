@@ -1,0 +1,102 @@
+contracts:
+  - name: browser-status
+    unit: browser-companion
+    type: rest
+    stability: must_preserve
+    source_loc: "app.py:185"
+    contract:
+      method: "GET"
+      path: "/status"
+      request: "No body; query string ignored."
+      response: "200 application/json: {ready: bool, loading: bool, voice: 'rocky' | null}."
+      error: "Unknown GET path returns 404 JSON {error: 'not found'}."
+      auth: "Loopback/default host; no application auth."
+    target_contract:
+      method: "GET /status"
+      notes: "Preserve current JSON fields and status behavior unless a future design explicitly changes this legacy browser API."
+    semantic_divergence: []
+
+  - name: browser-warm
+    unit: browser-companion
+    type: rest
+    stability: must_preserve
+    source_loc: "app.py:199"
+    contract:
+      method: "POST"
+      path: "/warm"
+      request: "Body is not used."
+      response: "200 application/json: {loading: true}; starts model warmup asynchronously."
+      error: "Other POST paths return 404 JSON."
+      auth: "Loopback/default host; no application auth."
+    target_contract:
+      method: "POST /warm"
+      notes: "Preserve asynchronous warmup semantics and response shape for existing browser callers."
+    semantic_divergence: []
+
+  - name: browser-say
+    unit: browser-companion
+    type: rest
+    stability: must_preserve
+    source_loc: "app.py:199"
+    contract:
+      method: "POST"
+      path: "/say"
+      request: "JSON with text and optional raw boolean."
+      response: "200 audio/wav; X-Rocky-Said and X-Rocky-Input headers carry URL-escaped text."
+      error: "400 for missing text; 503 if voice model is not ready; 502 if synthesis fails; 404 for unknown POST path."
+      auth: "Loopback/default host; no application auth."
+    target_contract:
+      method: "POST /say"
+      notes: "Preserve WAV response and text headers for existing browser UI; retain the documented status/error cases."
+    semantic_divergence: []
+
+  - name: voice-server
+    unit: voice-service
+    type: rest
+    stability: must_preserve
+    source_loc: "rocky_say.py:291"
+    contract:
+      method: "GET /health; POST /"
+      path: "127.0.0.1:59720"
+      request: "POST JSON {text: string}."
+      response: "GET /health returns 200 JSON status/voice; POST / returns a complete audio/wav response."
+      error: "POST with blank text returns 400; unknown GET path returns 404. Synthesis fallback calls tts_to_file if direct inference raises."
+      auth: "Loopback only."
+    target_contract:
+      method: "GET /health and POST /"
+      notes: "Preserve health and full-WAV synthesis contracts for current desktop/browser clients until a replacement engine is explicitly designed."
+    semantic_divergence: []
+
+  - name: desktop-brain-provider
+    unit: desktop-companion
+    type: sdk
+    stability: must_preserve
+    source_loc: "rocky_desktop_app.py:236"
+    contract:
+      method: "Streaming chat request"
+      path: "Ollama /api/chat; OpenAI-compatible /chat/completions; Anthropic /messages."
+      request: "System and user messages; model-specific streaming request; Ollama uses num_predict, temperature, top_p, num_ctx, keep_alive."
+      response: "Text deltas normalized by Brain._deltas and consumed as completed sentences."
+      error: "Network/timeout failures are logged; unavailable brain selects local echo mode."
+      auth: "Optional provider key via --brain-key or BRAIN_API_KEY."
+    target_contract:
+      method: "Brain.stream(text) yields text deltas"
+      notes: "Provider protocols can vary only through an explicit design decision; preserve local Ollama availability and echo fallback."
+    semantic_divergence: []
+
+  - name: desktop-vision-provider
+    unit: desktop-companion
+    type: sdk
+    stability: must_preserve
+    source_loc: "rocky_desktop_app.py:236"
+    contract:
+      method: "Single-frame vision request"
+      path: "Ollama /api/chat; OpenAI-compatible /chat/completions; Anthropic /messages."
+      request: "Prompt plus one JPEG frame; local Ollama receives base64 image content; hosted provider payloads use their image formats."
+      response: "One scene-description reply; local Ollama request is non-streaming."
+      error: "Camera/model/network errors are surfaced through the desktop note/log path; empty reply reports a missing vision model hint."
+      auth: "Optional provider key via --brain-key or BRAIN_API_KEY."
+    target_contract:
+      method: "Brain.vision(prompt, jpeg) -> str"
+      notes: "Preserve explicit one-shot look and provider-specific image payload handling unless the redesign adopts a new vision contract."
+    semantic_divergence: []

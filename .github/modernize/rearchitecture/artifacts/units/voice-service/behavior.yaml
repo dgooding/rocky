@@ -1,0 +1,49 @@
+unit: voice-service
+side_effects:
+  - source_loc: "rocky_say.py:335"
+    effect: "Starts a detached local XTTS server process and records its PID/log path."
+    must_preserve: true
+  - source_loc: "rocky_say.py:320"
+    effect: "Serves generated complete WAV audio on loopback port 59720."
+    must_preserve: true
+  - source_loc: "rocky_say.py:625"
+    effect: "Writes generated WAV bytes to the requested output file when --output is supplied."
+    must_preserve: true
+branches:
+  - source_loc: "rocky_say.py:293"
+    condition: "HTTP text is blank"
+    behavior: "Returns HTTP 400 without synthesis."
+    must_preserve: true
+  - source_loc: "rocky_say.py:306"
+    condition: "Direct XTTS inference raises"
+    behavior: "Falls back to tts.tts_to_file for the same text."
+    must_preserve: true
+  - source_loc: "rocky_say.py:384"
+    condition: "Persistent voice server is reachable"
+    behavior: "Uses the server fast path; otherwise returns None to caller for standalone fallback."
+    must_preserve: true
+  - source_loc: "rocky_say.py:589"
+    condition: "No text, file input, or piped stdin is available"
+    behavior: "Prints CLI help and exits with status 1."
+    must_preserve: true
+  - source_loc: "rocky_say.py:605"
+    condition: "Reference audio is missing"
+    behavior: "Prints an explicit error and exits with status 1."
+    must_preserve: true
+  - source_loc: "rocky_say.py:617"
+    condition: "TTS generation fails or returns no WAV"
+    behavior: "Prints an explicit error and exits with status 1."
+    must_preserve: true
+error_paths:
+  - source_loc: "rocky_say.py:353"
+    trigger: "The persistent server does not become healthy before the startup polling deadline."
+    outcome: "Prints a failure message pointing to the server log."
+    contract: "CLI reports failure through stderr; server_start currently returns without raising."
+    must_preserve: true
+  - source_loc: "rocky_say.py:356"
+    trigger: "Server PID is absent or process termination fails."
+    outcome: "Reports 'No server running' or removes PID after the stop attempt."
+    contract: "CLI status text; no HTTP error response."
+    must_preserve: true
+concurrency:
+  model: sync

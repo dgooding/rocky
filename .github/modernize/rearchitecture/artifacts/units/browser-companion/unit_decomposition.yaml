@@ -1,0 +1,15 @@
+unit: browser-companion
+commit: false
+candidate_splits:
+  - id: "app.py:45-166"
+    drivers: [concern_split, reuse_split]
+    rationale: "The embedded browser document contains presentation, speech recognition, status polling, retry, and audio playback logic inside the server module."
+    source_slice:
+      file: app.py
+      lines: [45, 166]
+  - id: "app.py:169-258"
+    drivers: [protocol_split, lifecycle_split]
+    rationale: "HTTP route handling, model warmup coordination, and server startup are distinct from browser presentation and can evolve on separate lifecycles."
+    source_slice:
+      file: app.py
+      lines: [169, 258]

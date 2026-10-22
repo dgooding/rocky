@@ -8,6 +8,8 @@ Status: proposal. Nothing below is implemented yet unless marked.
 
 ## Phase 0 — Instrument and decide (0.5–1 day)
 
+- [ ] Complete the reuse-first bake-off in [`OPEN_SOURCE_OPTIONS.md`](OPEN_SOURCE_OPTIONS.md): py-xiaozhi (editable app), available Xiaozhi Desktop build (UX reference), and Open WebUI (local voice benchmark).
+- [ ] Verify Mac compatibility, offline/local Ollama behavior, AEC/barge-in, Rocky voice/eyes integration, camera privacy, and source/license terms before choosing a foundation.
 - [ ] Add latency marks: speech-end, STT-final, LLM-first-token,
   TTS-first-byte, first-audio-played, barge-in-stop.
 - [ ] Write a JSONL trace per turn; compute p50/p95 over 20 turns.
@@ -16,9 +18,11 @@ Status: proposal. Nothing below is implemented yet unless marked.
 - [ ] Confirm voice-clone consent and a monthly cloud budget cap.
 - [ ] Run a one-day A/B: OpenAI Realtime vs Cartesia/ElevenLabs cascade.
 
-**Exit:** measured baseline; primary engine chosen; fallback chosen.
+**Exit:** measured baseline; decide reuse/adapt/build-smallest-missing-piece; only
+then choose a primary engine and fallback. Do not implement a replacement core
+before this decision.
 
-## Phase 1 — Realtime audio core (2–3 days)
+## Phase 1 — Realtime audio core (2–3 days; only if the reuse gate fails)
 
 - [ ] Continuous 16 kHz mic capture with 20 ms frames.
 - [ ] Silero VAD + Smart Turn v3 / semantic endpointing.
