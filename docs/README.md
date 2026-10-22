@@ -2,6 +2,7 @@
 
 | Document | What it covers |
 |---|---|
+| [`../HANDOFF.md`](../HANDOFF.md) | Current agent handoff: state, constraints, phases, next action |
 | [`../PROJECT.md`](../PROJECT.md) | The full handbook: status, setup, architecture, configuration, performance, gotchas, licensing, FAQ |
 | [`ARCHITECTURE.md`](ARCHITECTURE.md) | Process/thread model, pipeline, seams for the real-time redesign |
 | [`SETUP.md`](SETUP.md) | Install, assets, Ollama, app bundle, permissions, verification |

@@ -90,6 +90,7 @@ OpenAI-compatible or Anthropic brains are supported via CLI flags.
 
 | Document | What |
 |---|---|
+| [`HANDOFF.md`](HANDOFF.md) | Current agent handoff: state, constraints, phases, next action |
 | [`PROJECT.md`](PROJECT.md) | The full project handbook: setup, architecture, configuration, performance, gotchas, roadmap, licensing |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Component and threading model |
 | [`docs/SETUP.md`](docs/SETUP.md) | Detailed install, permissions, assets, and app bundle |

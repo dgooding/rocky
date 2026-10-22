@@ -7,6 +7,9 @@ This is the single document that explains the whole project: what works, how it
 is put together, how to run it, what is slow, what is next, and what the legal
 constraints are. The short version is in [`README.md`](README.md).
 
+> Picking up development? Start with [`HANDOFF.md`](HANDOFF.md) for the current
+> state, constraints, phases, and next action.
+
 Last updated: 2026-10-22
 
 ---
