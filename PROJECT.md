@@ -42,19 +42,19 @@ repository are the local build.
 | Piece | State | Notes |
 |---|---|---|
 | Voice clone (XTTS v2) | Working, slow | ~2.4–3.8 s per clause measured on an M1 Max; not real-time |
-| Mic capture | Working | 16 kHz mono, push-to-talk; not streaming |
-| Speech-to-text | Working | faster-whisper `base.en`, ~0.4 s after release |
+| Mic capture | Working | 16 kHz mono; hands-free (20 ms frames, energy-based speech detection) plus push-to-talk |
+| Speech-to-text | Working | faster-whisper `base.en`, ~0.4 s after you stop talking |
+| Wake word | Working | "hey Rocky" in the transcript; awake 60 s after each exchange; "Rocky, sleep" |
 | Brain | Working | Ollama `qwen3-coder:latest`, streamed; ~0.1 s warm first token |
 | Sentence/clause pipelining | Working | TTS starts on the first completed clause |
-| Eyes / emotions | Working | 7 presets, blink, gaze, amplitude bloom |
-| Camera + vision | Working | F3 snapshot → `qwen2.5vl:3b`; model swap can cost ~6 s |
+| Eyes / emotions | Working | 7 presets, blink, gaze, amplitude bloom, doze off when ignored |
+| Camera + vision | Working | "what do you see?" or F3 snapshot → `qwen2.5vl:3b`; model swap can cost ~6 s |
+| Watch mode | Working, opt-in | OpenCV face detection at 4 fps; eyes follow your face |
 | macOS permissions | Working | Camera/mic only work through a real `.app` bundle |
 | Text input | Working | Type + Enter in the app window |
-| Barge-in | **Missing** | Playback and listening are mutually exclusive |
-| Echo cancellation | **Missing** | Rocky can hear himself if the mic stays open |
+| Barge-in | **Missing** | He stops listening while he thinks or speaks |
+| Echo cancellation | **Missing** | Why he stops listening while he speaks |
 | Streaming playback | **Missing** | `pygame.mixer` plays a complete WAV file |
-| Continuous vision | **Missing** | Camera opens only for a snapshot |
-| Wake word | **Missing** | F1 hold / F2 toggle only |
 
 The detailed redesign is in [`docs/REALTIME_PLAN.md`](docs/REALTIME_PLAN.md).
 Measured numbers are in [`docs/LATENCY.md`](docs/LATENCY.md).
@@ -84,12 +84,12 @@ cd rocky
 ```
 
 `setup.sh` creates `./venv`, installs the pinned requirements, and prints the
-next steps. It does **not** download voice assets.
+next steps. It does **not** download voice assets; step 3.3 does.
 
-### 3.3 Restore the voice assets
+### 3.3 Download (or restore) the voice assets and models
 
 The repo intentionally does not redistribute the voice model or reference
-audio. Put these files in `assets/`:
+audio. These files belong in `assets/`:
 
 ```text
 assets/rocky_ref_15s.wav
@@ -97,7 +97,14 @@ assets/rocky_training_audio_scrubbed.wav
 assets/rocky_voice.pth
 ```
 
-Use your own backup, the original upstream download, or:
+Download them from the upstream author's published links, together with the
+Ollama models and the speech/voice model caches (~23 GB, once):
+
+```sh
+./scripts/fetch_assets.sh
+```
+
+Or copy your own backup:
 
 ```sh
 ./scripts/restore_assets.sh /path/to/your/rocky-assets
@@ -107,6 +114,8 @@ Use your own backup, the original upstream download, or:
 See [`assets/README.md`](assets/README.md) for the licensing warning.
 
 ### 3.4 Pull the local models
+
+`fetch_assets.sh` already does this. By hand:
 
 ```sh
 ollama pull qwen3-coder
@@ -160,9 +169,18 @@ For development without the camera:
 
 ## 4. Controls
 
+Hands-free, like the [desk robot](https://github.com/cgro00/desk-robot) he is
+modelled on: say **"hey Rocky"** to wake him (his name alone does not), then
+just talk; he stays awake for a minute after each exchange. "What do you
+see?", "what am I holding?" and "look left" take a camera look; "track me" /
+"stop tracking" turn watch mode on and off; "Rocky, sleep" or "goodnight" puts
+him back to sleep.
+
 ```
-F1 hold / F2 toggle   talk (release F1 to send)
+F1 hold / F2 toggle   push-to-talk (works alongside hands-free)
 F3 or Space           look through the camera
+F4                    hands-free listening on/off   (--push-to-talk starts it off)
+F5                    watch mode on/off              (--watch starts it on)
 type + Enter          talk by keyboard
 1 – 7                 force an emotion (when the input line is empty)
 Esc                   quit

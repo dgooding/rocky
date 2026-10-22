@@ -8,11 +8,26 @@ with eyes that morph through emotion presets and bounce to the audio.
 Everything runs on this machine; no cloud, no keys.
 
     python rocky_desktop_app.py                  # mic + Ollama brain
+    python rocky_desktop_app.py --watch          # also let the webcam watch for you
     python rocky_desktop_app.py --no-brain       # parrot: he repeats you back
     python rocky_desktop_app.py --selftest       # verify stt/ollama/eyes headless
 
+Senses (modelled on the desk robot he is based on, github.com/cgro00/desk-robot)
+    Hearing   hands-free by default. Say "hey Rocky" to wake him; his name alone
+              does not. He stays awake for a minute after each exchange, and
+              "Rocky, sleep" or "goodnight" puts him back to sleep. He stops
+              listening while he thinks or speaks, so he never hears himself.
+              F4 toggles; --push-to-talk starts with it off.
+    Sight     "what do you see?", "what am I holding?", "look left" or F3 takes
+              one camera look. "track me" / "stop tracking", F5, or --watch keep
+              the webcam open so his eyes follow your face. Off unless you turn
+              it on; he dozes off when ignored.
+
 Controls
-    F1 (hold) / F2 (toggle)   talk
+    F1 (hold) / F2 (toggle)   talk (push-to-talk, works alongside hands-free)
+    F3 or Space               look through the camera
+    F4                        hands-free listening on/off
+    F5                        webcam watching on/off
     type + Enter              same, by keyboard
     1-7                       force an emotion (when the input line is empty)
     Esc                       quit
@@ -25,6 +40,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import collections
 import io
 import json
 import math
@@ -59,7 +75,7 @@ WARN = (240, 150, 150)
 REC = (255, 90, 90)
 FPS = 60
 FONT_NAME = "menlo,monospace"
-HINT = "F1 hold / F2 toggle talk   -   F3 look   -   Esc quits"
+HINT = "F1/F2 talk  F3 look  F4 hands-free  F5 watch  Esc quit"
 
 LISTENING, THINKING, SPEAKING, IDLE = "LISTENING", "THINKING", "SPEAKING", "IDLE"
 LABELS = {LISTENING: "listening...", THINKING: "thinking...", SPEAKING: "speaking"}
@@ -73,6 +89,29 @@ SYSTEM_PROMPT = (
 
 VISION_PROMPT = "In one short sentence, describe the main thing you see."
 
+# Spoken or typed requests that should open the camera instead of only talking.
+LOOK_PATTERN = re.compile(
+    r"\b(what (do|can) you see|can you see|do you see|look at (this|me|that|my|the)"
+    r"|look (left|right|up|down|around|over there)"
+    r"|take a look|have a look|what am i (holding|wearing|showing|doing)"
+    r"|what('s| is) (this|that) (thing|object|i'm holding)|how do i look"
+    r"|see (this|me|my))\b",
+    re.IGNORECASE,
+)
+# "look left" turns his eyes that way before he looks (the robot turns its head).
+LOOK_DIRECTIONS = {"left": (7.0, 0.0), "right": (-7.0, 0.0), "up": (0.0, -4.0),
+                   "down": (0.0, 4.0)}
+
+# Hands-free voice commands, matching the desk robot he is modelled on
+# (github.com/cgro00/desk-robot): "hey Rocky" wakes him, his name alone does not,
+# and he stays awake for a while after each exchange.
+AWAKE_SECONDS = 60
+WAKE_PATTERN = re.compile(r"\b(hey|hi|hay|okay|ok),?\s+rock(y|ie|ey)\b[\s,.!?]*", re.IGNORECASE)
+SLEEP_PATTERN = re.compile(
+    r"^\W*((hey\s+)?rock(y|ie|ey)\W+)?(go to sleep|sleep|good ?night)\W*$", re.IGNORECASE)
+TRACK_ON_PATTERN = re.compile(r"\b(track me|follow me|watch me|start tracking)\b", re.IGNORECASE)
+TRACK_OFF_PATTERN = re.compile(r"\b(stop (tracking|following|watching)( me)?)\b", re.IGNORECASE)
+
 state = IDLE
 subtitle = ""        # what is being said, or what was heard
 note = ""            # transient line: errors, hints
@@ -80,6 +119,10 @@ amplitude = 0.0
 eyes_emotion = "neutral"
 jobs: queue.Queue = queue.Queue()
 mic_recording = False
+quiet_until = 0.0    # hands-free listening ignores the mic until this time
+face_pos = None      # (x, y) in -1..1 of the face the webcam sees, or None
+awake_until = 0.0    # hands-free answers without "hey Rocky" until this time
+gaze_override = None  # ((x, y), until) - where he was asked to look
 
 
 # --- audio --------------------------------------------------------------
@@ -97,7 +140,7 @@ def rms_envelope(wav_bytes: bytes, frame_ms: int = 30):
 
 def play_with_envelope(wav_bytes: bytes) -> None:
     """Play a clip, publishing `amplitude` while it runs."""
-    global amplitude, note
+    global amplitude, note, quiet_until
     env, rate, duration = rms_envelope(wav_bytes)
     if not env:
         note = "generated audio was empty"
@@ -124,6 +167,8 @@ def play_with_envelope(wav_bytes: bytes) -> None:
         amplitude = env[i] if 0 <= i < len(env) else 0.0
         time.sleep(0.016)
     amplitude = 0.0
+    # Let the room echo die down before hands-free listening resumes.
+    quiet_until = time.monotonic() + 0.4
 
 
 # --- microphone ---------------------------------------------------------
@@ -168,6 +213,155 @@ class Mic:
         return audio
 
 
+class Endpointer:
+    """Cuts a stream of short audio frames into utterances by loudness.
+
+    The noise floor adapts while nobody is talking, so a fan or a quiet room
+    both work. Speech starts after a few loud frames in a row and ends after a
+    stretch of quiet; a short pre-roll keeps the first syllable.
+    """
+
+    def __init__(self, rate: int = 16000, frame_ms: int = 20, start_ms: int = 80,
+                 end_ms: int = 700, preroll_ms: int = 300, max_s: float = 15.0,
+                 min_speech_ms: int = 250) -> None:
+        per_s = 1000 / frame_ms
+        self.start_frames = max(1, start_ms // frame_ms)
+        self.end_frames = max(1, end_ms // frame_ms)
+        self.max_frames = int(max_s * per_s)
+        self.min_voiced = max(1, min_speech_ms // frame_ms)
+        self.preroll = max(1, preroll_ms // frame_ms)
+        self.noise = 0.003
+        self.reset()
+
+    def reset(self) -> None:
+        self.active = False
+        self.hits = 0
+        self.voiced = 0
+        self.silent = 0
+        self.buf: list = []
+        self.pre: collections.deque = collections.deque(maxlen=self.preroll)
+
+    def threshold(self) -> float:
+        return max(0.012, self.noise * 3.5)
+
+    def push(self, frame: np.ndarray):
+        """Feed one frame. Returns ("start"|"end"|"drop", audio-or-None) or None."""
+        rms = float(np.sqrt(np.mean(np.square(frame)))) if len(frame) else 0.0
+        loud = rms > self.threshold()
+        if not self.active:
+            self.pre.append(frame)
+            if loud:
+                self.hits += 1
+            else:
+                self.hits = 0
+                self.noise = min(0.05, max(0.001, 0.95 * self.noise + 0.05 * rms))
+            if self.hits >= self.start_frames:
+                self.active = True
+                self.buf = list(self.pre)
+                self.voiced, self.silent = self.hits, 0
+                return ("start", None)
+            return None
+        self.buf.append(frame)
+        if loud:
+            self.voiced += 1
+            self.silent = 0
+        else:
+            self.silent += 1
+        if self.silent >= self.end_frames or len(self.buf) >= self.max_frames:
+            audio = np.concatenate(self.buf).astype(np.float32)
+            voiced = self.voiced
+            self.reset()
+            return ("end", audio) if voiced >= self.min_voiced else ("drop", None)
+        return None
+
+
+class Ears:
+    """Hands-free listening: an always-open mic stream cut into utterances.
+
+    Audio stays on this machine. Rocky stops listening while he is thinking or
+    speaking (there is no echo cancellation), so he never hears himself.
+    """
+
+    RATE = 16000
+    FRAME = 320  # 20 ms
+
+    def __init__(self) -> None:
+        self.enabled = False
+        self.error = ""
+        self.stream = None
+        self.frames: queue.Queue = queue.Queue(maxsize=500)
+        self.endpointer = Endpointer(self.RATE, 1000 * self.FRAME // self.RATE)
+        self.thread = None
+
+    def start(self) -> bool:
+        import sounddevice as sd
+        if self.enabled:
+            return True
+        self.error = ""
+        try:
+            self.stream = sd.InputStream(samplerate=self.RATE, channels=1, dtype="float32",
+                                         blocksize=self.FRAME, callback=self._cb)
+            self.stream.start()
+        except Exception as e:  # noqa: BLE001
+            self.error, self.stream = str(e), None
+            print(f"[ears] {e}", file=sys.stderr)
+            return False
+        self.endpointer.reset()
+        self.enabled = True
+        if self.thread is None:
+            self.thread = threading.Thread(target=self._loop, daemon=True)
+            self.thread.start()
+        return True
+
+    def stop(self) -> None:
+        self.enabled = False
+        if self.stream is not None:
+            try:
+                self.stream.stop()
+                self.stream.close()
+            except Exception:  # noqa: BLE001
+                pass
+            self.stream = None
+        self.endpointer.reset()
+
+    def close(self) -> None:
+        self.stop()
+        self.frames.put(None)
+
+    def _cb(self, indata, frames, time_info, status):
+        try:
+            self.frames.put_nowait(indata[:, 0].copy())
+        except queue.Full:
+            pass
+
+    def can_hear(self) -> bool:
+        return (self.enabled and not mic_recording and state in (IDLE, LISTENING)
+                and time.monotonic() >= quiet_until)
+
+    def _loop(self) -> None:
+        global state
+        while True:
+            frame = self.frames.get()
+            if frame is None:
+                return
+            if not self.can_hear():
+                if self.endpointer.active and state == LISTENING:
+                    state = IDLE
+                self.endpointer.reset()
+                continue
+            event = self.endpointer.push(frame)
+            if event is None:
+                continue
+            kind, audio = event
+            if kind == "start" and state == IDLE:
+                state = LISTENING
+            elif kind == "end":
+                state = THINKING
+                jobs.put({"audio": audio, "hands_free": True})
+            elif kind == "drop" and state == LISTENING:
+                state = IDLE
+
+
 # --- camera -------------------------------------------------------------
 class Camera:
     """Opens the webcam only when asked. No idle streaming, nothing uploaded.
@@ -178,9 +372,15 @@ class Camera:
 
     def __init__(self, index: int = 0) -> None:
         self.index = index
+        self.live = None  # a running Watcher shares its frames instead of reopening
 
     def snapshot(self, warmup: int = 5) -> bytes:
         import cv2
+        frame = self.live.latest() if self.live is not None else None
+        if frame is not None:
+            ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+            if ok:
+                return buf.tobytes()
         cap = cv2.VideoCapture(self.index)
         if not cap.isOpened():
             raise RuntimeError("camera unavailable - check System Settings > "
@@ -201,6 +401,102 @@ class Camera:
             return buf.tobytes()
         finally:
             cap.release()
+
+
+class Watcher:
+    """Opt-in presence sense: keeps the webcam open and watches for a face.
+
+    Off unless turned on (F5 or --watch); the camera light stays on while it
+    runs. Frames never leave the machine: face detection is OpenCV's bundled
+    Haar cascade, and the vision model only sees a frame when you ask.
+    """
+
+    def __init__(self, camera: Camera, fps: float = 4.0, absent_after: float = 8.0) -> None:
+        self.camera = camera
+        self.period = 1.0 / fps
+        self.absent_after = absent_after
+        self.enabled = False
+        self.error = ""
+        self.present = False
+        self._frame = None
+        self._frame_t = 0.0
+        self._lock = threading.Lock()
+        self._thread = None
+
+    def start(self) -> bool:
+        import cv2
+        if self.enabled:
+            return True
+        self.error = ""
+        cascade = cv2.CascadeClassifier(
+            os.path.join(cv2.data.haarcascades, "haarcascade_frontalface_default.xml"))
+        if cascade.empty():
+            self.error = "face detector unavailable"
+            return False
+        cap = cv2.VideoCapture(self.camera.index)
+        if not cap.isOpened():
+            self.error = "camera unavailable"
+            return False
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # keep frames fresh at a low read rate
+        self.enabled, self.present = True, False
+        self.camera.live = self
+        self._thread = threading.Thread(target=self._loop, args=(cap, cascade), daemon=True)
+        self._thread.start()
+        return True
+
+    def stop(self) -> None:
+        global face_pos
+        self.enabled = False
+        if self._thread is not None:
+            self._thread.join(timeout=2)
+            self._thread = None
+        self.camera.live = None
+        face_pos = None
+        with self._lock:
+            self._frame = None
+
+    def latest(self, max_age: float = 1.0):
+        with self._lock:
+            if self._frame is not None and time.monotonic() - self._frame_t <= max_age:
+                return self._frame.copy()
+        return None
+
+    def _loop(self, cap, cascade) -> None:
+        global face_pos
+        import cv2
+        seen_streak, last_seen = 0, 0.0
+        try:
+            while self.enabled:
+                t0 = time.monotonic()
+                ok, frame = cap.read()
+                if not ok:
+                    time.sleep(0.2)
+                    continue
+                with self._lock:
+                    self._frame, self._frame_t = frame, t0
+                small = cv2.resize(frame, (320, 240))
+                gray = cv2.equalizeHist(cv2.cvtColor(small, cv2.COLOR_BGR2GRAY))
+                faces = cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5,
+                                                 minSize=(36, 36))
+                if len(faces):
+                    x, y, w, h = max(faces, key=lambda f: f[2] * f[3])
+                    face_pos = ((x + w / 2) / 160 - 1.0, (y + h / 2) / 120 - 1.0)
+                    seen_streak, last_seen = seen_streak + 1, t0
+                    if not self.present and seen_streak >= 2:
+                        self.present = True
+                        jobs.put({"event": "arrived"})
+                else:
+                    seen_streak = 0
+                    face_pos = None
+                    if self.present and t0 - last_seen > self.absent_after:
+                        self.present = False
+                        jobs.put({"event": "left"})
+                time.sleep(max(0.0, self.period - (time.monotonic() - t0)))
+        finally:
+            cap.release()
+            face_pos = None
 
 
 # --- speech to text -----------------------------------------------------
@@ -533,8 +829,49 @@ def speak(sentences) -> None:
         play_with_envelope(wav)
 
 
-def worker(transcriber: Transcriber, brain: Brain, camera) -> None:
+def look(camera, brain: Brain, question: str = "") -> None:
+    """Take one webcam frame and answer about it (F3, or a spoken 'look')."""
     global state, subtitle, note, eyes_emotion
+    state, eyes_emotion, subtitle = THINKING, "thinking", "looking..."
+    if camera is None:
+        note, state = "camera disabled", IDLE
+        return
+    jpeg = camera.snapshot()
+    try:      # keep what he saw, for when the answer makes no sense
+        with open(os.path.join(rocky.LOGS_DIR, "last_look.jpg"), "wb") as f:
+            f.write(jpeg)
+    except OSError:
+        pass
+    prompt = (f'Your friend asks: "{question}" Answer that.' if question
+              else "Describe the scene.")
+    reply = brain.vision(prompt, jpeg)
+    if not reply:
+        note, state = f"no vision reply - try: ollama pull {brain.vision_model}", IDLE
+        return
+    print(f"[rocky] {reply}", file=sys.stderr)
+    speak(split_sentences(reply))
+    state = IDLE
+
+
+# faster-whisper sometimes "hears" these in room noise; ignore them hands-free.
+PHANTOM_PHRASES = {"", "you", "thank you", "thanks", "thanks for watching", "bye", "okay"}
+
+
+def stay_awake() -> None:
+    global awake_until
+    awake_until = time.monotonic() + AWAKE_SECONDS
+
+
+def say_line(line: str) -> None:
+    """Speak a fixed line, e.g. to confirm a voice command."""
+    global state
+    state = THINKING
+    speak([line])
+    state = IDLE
+
+
+def worker(transcriber: Transcriber, brain: Brain, camera, watcher=None) -> None:
+    global state, subtitle, note, eyes_emotion, awake_until, gaze_override
     while True:
         job = jobs.get()
         if job is None:
@@ -542,29 +879,40 @@ def worker(transcriber: Transcriber, brain: Brain, camera) -> None:
         try:
             note = ""
             if job.get("look") is not None:
-                state, eyes_emotion, subtitle = THINKING, "thinking", "looking..."
-                if camera is None:
-                    note, state = "camera disabled", IDLE
-                    continue
-                jpeg = camera.snapshot()
-                try:      # keep what he saw, for when the answer makes no sense
-                    with open(os.path.join(rocky.LOGS_DIR, "last_look.jpg"), "wb") as f:
-                        f.write(jpeg)
-                except OSError:
-                    pass
-                reply = brain.vision("Describe the scene.", jpeg)
-                if not reply:
-                    note, state = (f"no vision reply - try: ollama pull "
-                                   f"{brain.vision_model}"), IDLE
-                    continue
-                print(f"[rocky] {reply}", file=sys.stderr)
-                speak(split_sentences(reply))
-                state = IDLE
+                look(camera, brain)
+                continue
+
+            event = job.get("event")
+            if event == "left":
+                if state == IDLE:
+                    eyes_emotion, subtitle = "sleepy", ""
+                continue
+            if event == "arrived":
+                # He perks up when you sit down; like the robot, he does not talk
+                # unprompted.
+                if state == IDLE:
+                    eyes_emotion = "happy"
                 continue
 
             if job.get("audio") is not None:
                 state, eyes_emotion = THINKING, "thinking"
                 heard = transcriber.transcribe(job["audio"])
+                if job.get("hands_free"):
+                    if heard.strip(" .!?,").lower() in PHANTOM_PHRASES:
+                        state = IDLE
+                        continue
+                    wake = WAKE_PATTERN.search(heard)
+                    if wake is None and time.monotonic() >= awake_until:
+                        state = IDLE  # asleep, and nobody said "hey Rocky"
+                        continue
+                    if wake is not None:
+                        stay_awake()
+                        rest = heard[wake.end():].strip(" ,.!?")
+                        if not rest:  # just his name: look up and wait
+                            subtitle, eyes_emotion, state = "you: " + heard, "surprised", IDLE
+                            gaze_override = ((0.0, -4.0), time.monotonic() + 2.0)
+                            continue
+                        heard = rest
                 if not heard:
                     note, state = "didn't catch that", IDLE
                     continue
@@ -572,6 +920,39 @@ def worker(transcriber: Transcriber, brain: Brain, camera) -> None:
                 text = heard
             else:
                 text = job["text"]
+            wake = WAKE_PATTERN.match(text)
+            if wake is not None and text[wake.end():].strip():
+                text = text[wake.end():].strip()
+
+            if SLEEP_PATTERN.match(text):
+                awake_until = 0.0
+                say_line("Goodnight, friend.")
+                eyes_emotion = "sleepy"
+                continue
+            stay_awake()
+
+            if TRACK_OFF_PATTERN.search(text) or TRACK_ON_PATTERN.search(text):
+                if watcher is None:
+                    say_line("No camera, friend.")
+                elif TRACK_OFF_PATTERN.search(text):
+                    watcher.stop()
+                    say_line("Okay. Stop watching.")
+                elif watcher.start():
+                    say_line("Watching you, friend.")
+                else:
+                    note = f"watching failed: {watcher.error}"
+                    say_line("Cannot see. Camera problem.")
+                continue
+
+            if camera is not None and LOOK_PATTERN.search(text):
+                direction = re.search(r"\blook (left|right|up|down)\b", text, re.IGNORECASE)
+                if direction:
+                    gaze_override = (LOOK_DIRECTIONS[direction.group(1).lower()],
+                                     time.monotonic() + 4.0)
+                print(f"[you] {text} (looking)", file=sys.stderr)
+                look(camera, brain, text)
+                stay_awake()
+                continue
 
             state, eyes_emotion = THINKING, "thinking"
             if brain.available():
@@ -582,13 +963,15 @@ def worker(transcriber: Transcriber, brain: Brain, camera) -> None:
                 print(f"[rocky] {text}", file=sys.stderr)
                 speak(split_sentences(text))
             state = IDLE
+            stay_awake()
         except Exception as e:  # noqa: BLE001
             note, state = f"error: {e}", IDLE
             print(f"[worker] {e}", file=sys.stderr)
 
 
 # --- drawing ------------------------------------------------------------
-def render(screen, font, small, t, st, said, msg, typed, recording, eyes):
+def render(screen, font, small, t, st, said, msg, typed, recording, eyes,
+           ears_on=False, watching=False, awake=False):
     screen.fill(BG)
     eyes.draw(screen, t, glow=0.5 + amplitude * 0.9)
 
@@ -602,6 +985,13 @@ def render(screen, font, small, t, st, said, msg, typed, recording, eyes):
     elif st == IDLE and not said:
         screen.blit(small.render(HINT, True, DIM), (16, H - 46))
 
+    # which senses are on: always visible, so the mic and camera are never hidden
+    hearing = ("awake" if awake else 'say "hey Rocky"') if ears_on else ""
+    senses = "  ".join(s for s in (hearing, "watching" if watching else "") if s)
+    if senses:
+        label = small.render(senses, True, DIM)
+        screen.blit(label, (W - 40 - label.get_width(), 15))
+
     # recording dot
     if recording:
         pygame.draw.circle(screen, REC, (W - 24, 22), 7)
@@ -612,8 +1002,9 @@ def render(screen, font, small, t, st, said, msg, typed, recording, eyes):
     pygame.display.flip()
 
 
-def run(mic: Mic, transcriber: Transcriber, brain: Brain, camera=None) -> None:
-    global state, mic_recording
+def run(mic: Mic, transcriber: Transcriber, brain: Brain, camera=None,
+        ears=None, watcher=None, hands_free: bool = True, watch: bool = False) -> None:
+    global state, mic_recording, note
     pygame.mixer.pre_init(24000, -16, 1, 512)
     pygame.init()
     pygame.display.set_caption("Rocky")
@@ -623,10 +1014,15 @@ def run(mic: Mic, transcriber: Transcriber, brain: Brain, camera=None) -> None:
     clock = pygame.time.Clock()
     eyes = rocky_eyes.Eyes()
 
-    threading.Thread(target=worker, args=(transcriber, brain, camera), daemon=True).start()
+    threading.Thread(target=worker, args=(transcriber, brain, camera, watcher),
+                     daemon=True).start()
     threading.Thread(target=warm_voice, daemon=True).start()
     threading.Thread(target=transcriber.warm, daemon=True).start()
     threading.Thread(target=brain.warm, daemon=True).start()
+    if ears is not None and hands_free and not ears.start():
+        note = f"hands-free off: {ears.error}"[:68]
+    if watcher is not None and watch and not watcher.start():
+        note = f"watching off: {watcher.error}"
 
     typed, recording = "", False
     next_blink = time.monotonic() + random.uniform(1.5, 4)
@@ -658,6 +1054,24 @@ def run(mic: Mic, transcriber: Transcriber, brain: Brain, camera=None) -> None:
                     mic_recording = recording
                 elif e.key == pygame.K_F3 or (e.key == pygame.K_SPACE and not typed):
                     jobs.put({"look": True})
+                elif e.key == pygame.K_F4 and ears is not None:
+                    if ears.enabled:
+                        ears.stop()
+                        if state == LISTENING and not recording:
+                            state = IDLE
+                        note = "hands-free off - F1/F2 to talk"
+                    elif ears.start():
+                        note = "hands-free on - just talk"
+                    else:
+                        note = f"hands-free failed: {ears.error}"[:68]
+                elif e.key == pygame.K_F5 and watcher is not None:
+                    if watcher.enabled:
+                        watcher.stop()
+                        note = "watching off - camera closed"
+                    elif watcher.start():
+                        note = "watching on - camera stays open"
+                    else:
+                        note = f"watching failed: {watcher.error}"
                 elif e.key == pygame.K_RETURN and typed.strip():
                     jobs.put({"text": typed.strip()})
                     typed = ""
@@ -673,13 +1087,18 @@ def run(mic: Mic, transcriber: Transcriber, brain: Brain, camera=None) -> None:
                 mic_recording = False
                 jobs.put({"audio": audio})
 
-        # emotion follows what the robot is doing
+        # emotion follows what the robot is doing; when ignored (asleep, idle,
+        # nobody in view) he dozes off like the desk robot does
         if recording and state == IDLE:
             state = LISTENING
+        dozing = (ears is not None and ears.enabled and state == IDLE
+                  and face_pos is None and now > awake_until + 15)
         if state == LISTENING:
             eyes.set_emotion("neutral")
         elif state == THINKING:
             eyes.set_emotion("thinking")
+        elif dozing:
+            eyes.set_emotion("sleepy")
         elif state == IDLE and eyes.emotion != eyes_emotion:
             eyes.set_emotion(eyes_emotion)
 
@@ -693,17 +1112,33 @@ def run(mic: Mic, transcriber: Transcriber, brain: Brain, camera=None) -> None:
             gaze = (random.uniform(-7, 7), random.uniform(-4, 4))
             next_gaze = now + random.uniform(1.6, 4.5)
 
-        if state == LISTENING:
-            g = (0.0, -3.0)
+        seen = face_pos
+        override = gaze_override
+        if override is not None and now < override[1]:
+            g = override[0]
         elif state == THINKING:
             g = (0.0, -4.0)
+        elif seen is not None:
+            # Look back at the person the webcam sees. The camera is not mirrored:
+            # someone on the image's right is on Rocky's right, which is the
+            # viewer's left, so his eyes move toward screen-left.
+            g = (-seen[0] * 7.0, seen[1] * 4.0)
+        elif state == LISTENING:
+            g = (0.0, -3.0)
         else:
             g = gaze
 
         eyes.update(dt, amp=amplitude, blink=bool(blink_until), t=now, gaze=g)
-        render(screen, font, small, now, state, subtitle, note, typed, recording, eyes)
+        render(screen, font, small, now, state, subtitle, note, typed, recording, eyes,
+               ears_on=ears is not None and ears.enabled,
+               watching=watcher is not None and watcher.enabled,
+               awake=now < awake_until)
         clock.tick(FPS)
 
+    if ears is not None:
+        ears.close()
+    if watcher is not None:
+        watcher.stop()
     jobs.put(None)
     pygame.quit()
 
@@ -734,6 +1169,7 @@ def selftest(no_brain: bool) -> int:
 
     print(f"[selftest] sentences: {split_sentences('Hi! Are you okay? I am happy happy happy to meet you. ' * 2)}")
     print(f"[selftest] moods: {[(s, rocky_eyes.mood_for(s)) for s in ('I am happy', 'bad bad bad', 'wow really', 'I think so')]}")
+    ok = senses_selftest() and ok
 
     pygame.init()
     pygame.display.set_mode((W, H))
@@ -768,6 +1204,70 @@ def selftest(no_brain: bool) -> int:
     return 0 if ok else 1
 
 
+def senses_selftest() -> bool:
+    """Hearing and sight checks that need no microphone, camera, or models."""
+    ok = True
+
+    # Hearing: room noise, then 1 s of speech-like tone, then silence -> one utterance.
+    rng = np.random.default_rng(0)
+    rate, frame = 16000, 320
+    t = np.arange(rate) / rate
+    speech = (0.2 * np.sin(2 * np.pi * 220 * t)).astype(np.float32)
+    stream = np.concatenate([rng.normal(0, 0.002, rate).astype(np.float32), speech,
+                             rng.normal(0, 0.002, rate).astype(np.float32)])
+    ep, events = Endpointer(rate, 20), []
+    for i in range(0, len(stream) - frame + 1, frame):
+        event = ep.push(stream[i:i + frame])
+        if event:
+            events.append((event[0], 0 if event[1] is None else len(event[1]) / rate))
+    heard_ok = [k for k, _ in events] == ["start", "end"] and 1.0 <= events[-1][1] <= 2.2
+    print(f"[selftest] hearing endpointer: {events} -> {'ok' if heard_ok else 'FAIL'}")
+    ok = ok and heard_ok
+
+    clicks, ep = [], Endpointer(rate, 20)  # a short click must not become an utterance
+    blip = np.concatenate([np.zeros(rate // 2, np.float32), 0.3 * np.ones(1600, np.float32),
+                           np.zeros(rate, np.float32)])
+    for i in range(0, len(blip) - frame + 1, frame):
+        event = ep.push(blip[i:i + frame])
+        if event and event[0] == "end":
+            clicks.append(event)
+    print(f"[selftest] hearing ignores a click: {'ok' if not clicks else 'FAIL'}")
+    ok = ok and not clicks
+
+    asks = ("What do you see?", "Rocky, what am I holding", "look at this", "can you see me",
+            "Rocky, look left")
+    chats = ("I look forward to it", "what is the time", "see you later", "hello friend")
+    look_ok = all(LOOK_PATTERN.search(s) for s in asks) and not any(
+        LOOK_PATTERN.search(s) for s in chats)
+    print(f"[selftest] sight look-intent: {'ok' if look_ok else 'FAIL'}")
+    ok = ok and look_ok
+
+    wake = WAKE_PATTERN.search("Hey, Rocky, what time is it?")
+    commands_ok = (
+        bool(WAKE_PATTERN.search("Hey Rocky.")) and wake is not None
+        and "Hey, Rocky, what time is it?"[wake.end():] == "what time is it?"
+        and not WAKE_PATTERN.search("Rocky is my friend")      # name alone does not wake
+        and not WAKE_PATTERN.search("I like rocky road ice cream")
+        and all(SLEEP_PATTERN.match(s) for s in ("Rocky, sleep.", "Goodnight!", "good night"))
+        and not SLEEP_PATTERN.match("I need more sleep tonight")
+        and bool(TRACK_ON_PATTERN.search("Rocky, track me"))
+        and bool(TRACK_OFF_PATTERN.search("stop tracking"))
+        and not TRACK_ON_PATTERN.search("stop tracking"))
+    print(f"[selftest] hearing commands (wake/sleep/track): {'ok' if commands_ok else 'FAIL'}")
+    ok = ok and commands_ok
+
+    try:
+        import cv2
+        cascade = cv2.CascadeClassifier(
+            os.path.join(cv2.data.haarcascades, "haarcascade_frontalface_default.xml"))
+        face_ok = not cascade.empty()
+    except Exception as e:  # noqa: BLE001
+        print(f"[selftest] sight face detector: {e}")
+        face_ok = False
+    print(f"[selftest] sight face detector: {'ok' if face_ok else 'FAIL'}")
+    return ok and face_ok
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Rocky desk companion")
     ap.add_argument("--no-brain", action="store_true", help="skip the LLM; echo what you say")
@@ -784,7 +1284,12 @@ def main() -> None:
     ap.add_argument("--vision-model", default="qwen2.5vl:3b",
                     help="vision model for F3 (ollama qwen2.5vl:3b, or a hosted model)")
     ap.add_argument("--camera-index", type=int, default=0, help="webcam index for F3")
-    ap.add_argument("--no-camera", action="store_true", help="disable F3 look")
+    ap.add_argument("--no-camera", action="store_true", help="disable F3 look and watching")
+    ap.add_argument("--watch", action="store_true",
+                    help="start with the webcam watching for you (F5 toggles); "
+                         "the camera stays open while watching")
+    ap.add_argument("--push-to-talk", action="store_true",
+                    help="start with hands-free listening off (F4 toggles)")
     ap.add_argument("--snap", metavar="PATH",
                     help="grab one camera frame, save it, exit (permission check)")
     ap.add_argument("--stt-model", default="base.en",
@@ -817,7 +1322,9 @@ def main() -> None:
     if not brain.available():
         print("[brain] no LLM available - Rocky will repeat what you say", file=sys.stderr)
     camera = None if args.no_camera else Camera(args.camera_index)
-    run(Mic(), Transcriber(args.stt_model), brain, camera)
+    watcher = None if camera is None else Watcher(camera)
+    run(Mic(), Transcriber(args.stt_model), brain, camera, ears=Ears(), watcher=watcher,
+        hands_free=not args.push_to_talk, watch=args.watch)
 
 
 if __name__ == "__main__":

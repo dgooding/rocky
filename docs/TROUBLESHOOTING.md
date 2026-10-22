@@ -160,9 +160,11 @@ If macOS asks again, allow camera/microphone once. The identifier stays
 
 ### `assets/rocky_ref_15s.wav` missing
 
-The repository does not include voice assets. Restore them:
+The repository does not include voice assets. Download them, or restore your
+own backup:
 
 ```sh
+./scripts/fetch_assets.sh
 ./scripts/restore_assets.sh /path/to/your/rocky-assets
 ```
 

@@ -1,15 +1,20 @@
 # Roadmap
 
 The goal is a desk companion that feels present: sub-second speech, natural
-interruption, continuous awareness, and graceful failure. Work is ordered by
-risk and by what unlocks the most perceived improvement.
+interruption, continuous awareness, and graceful failure. It is the on-screen
+version of the [desk robot](https://github.com/cgro00/desk-robot) Rocky is
+modelled on. Work is ordered by risk and by what unlocks the most perceived
+improvement.
 
-Status: proposal. Nothing below is implemented yet unless marked.
+Status: in progress. Items are not implemented unless checked.
 
 ## Phase 0 — Instrument and decide (0.5–1 day)
 
-- [ ] Complete the reuse-first bake-off in [`OPEN_SOURCE_OPTIONS.md`](OPEN_SOURCE_OPTIONS.md): py-xiaozhi (editable app), available Xiaozhi Desktop build (UX reference), and Open WebUI (local voice benchmark).
-- [ ] Verify Mac compatibility, offline/local Ollama behavior, AEC/barge-in, Rocky voice/eyes integration, camera privacy, and source/license terms before choosing a foundation.
+- [x] Decide the foundation: build on Rocky's own app (owner decision,
+  2026-10-22). The outside-app survey is in
+  [`OPEN_SOURCE_OPTIONS.md`](OPEN_SOURCE_OPTIONS.md) for reference.
+- [x] Senses in the app: hearing (hands-free, "hey Rocky") and sight (webcam).
+- [ ] Verify hearing and sight on the Mac (see `AGENTS.md`).
 - [ ] Add latency marks: speech-end, STT-final, LLM-first-token,
   TTS-first-byte, first-audio-played, barge-in-stop.
 - [ ] Write a JSONL trace per turn; compute p50/p95 over 20 turns.
@@ -18,14 +23,13 @@ Status: proposal. Nothing below is implemented yet unless marked.
 - [ ] Confirm voice-clone consent and a monthly cloud budget cap.
 - [ ] Run a one-day A/B: OpenAI Realtime vs Cartesia/ElevenLabs cascade.
 
-**Exit:** measured baseline; decide reuse/adapt/build-smallest-missing-piece; only
-then choose a primary engine and fallback. Do not implement a replacement core
-before this decision.
+**Exit:** measured baseline; primary engine and fallback chosen.
 
-## Phase 1 — Realtime audio core (2–3 days; only if the reuse gate fails)
+## Phase 1 — Realtime audio core (2–3 days)
 
-- [ ] Continuous 16 kHz mic capture with 20 ms frames.
-- [ ] Silero VAD + Smart Turn v3 / semantic endpointing.
+- [x] Continuous 16 kHz mic capture with 20 ms frames.
+- [ ] Silero VAD + Smart Turn v3 / semantic endpointing (today: adaptive
+  energy endpointing, 700 ms pause).
 - [ ] Replace `pygame.mixer` with `sounddevice`/PyAudio PCM playback.
 - [ ] Add a cancelable audio ring buffer.
 - [ ] Implement barge-in: stop, flush, cancel, listen.
@@ -51,19 +55,21 @@ self-hearing.
 
 ## Phase 3 — Vision (2–3 days)
 
-- [ ] Continuous camera capture at 640×480/30 FPS in a background thread.
-- [ ] MediaPipe/YOLO detector at 5–10 FPS (presence, face, hands, objects).
+- [x] Background camera capture (opt-in watch mode), latest frame shared.
+- [x] Local face detector (OpenCV Haar cascade, 4 fps): eyes follow you,
+  arrive/leave events. MediaPipe/YOLO for hands and objects is still open.
 - [ ] Scene-change gating (perceptual hash or frame diff).
-- [ ] On-demand VLM: local Moondream/SmolVLM/qwen2.5vl or the realtime session.
-- [ ] Camera indicator, explicit look mode, privacy toggle.
-- [ ] Save `logs/last_look.jpg` for debugging.
+- [x] On-demand VLM from speech ("what am I holding?") via local `qwen2.5vl:3b`.
+- [x] Camera indicator ("watching"), explicit look mode, privacy toggle (F5).
+- [x] Save `logs/last_look.jpg` for debugging.
 
 **Exit:** "what am I holding?" <1.5 s; "did the user leave?" <1 s; no VLM at
 30 FPS.
 
 ## Phase 4 — Real-world hardening (3–5 days)
 
-- [ ] Wake word (`openWakeWord`) or a clear push-to-talk mode.
+- [x] Wake phrase "hey Rocky" + push-to-talk + "Rocky, sleep" (`openWakeWord`
+  is an option to avoid transcribing room talk while asleep).
 - [ ] Conversation memory with a short context window.
 - [ ] Offline/local fallback when the cloud is unavailable.
 - [ ] Cost caps, per-turn limits, and a kill switch.
@@ -101,3 +107,7 @@ fallback works.
 | 2026-10-22 | Reject XTTS as the real-time path | Measured 2.4–3.8 s/clause; `inference_stream` broken |
 | 2026-10-22 | Plan a two-engine realtime core | OpenAI Realtime for speed; Pipecat cascade for voice/control |
 | 2026-10-22 | Exclude voice assets from the public repo | CC BY-NC + film IP restrictions |
+| 2026-10-22 | Build on Rocky's own app; no outside app | Owner decision after the survey; outside candidates were Chinese-first or off-target |
+| 2026-10-22 | Senses: hearing (hands-free, "hey Rocky") and sight (webcam) | Match the desk robot (cgro00/desk-robot) Rocky is modelled on |
+| 2026-10-22 | Watch mode is opt-in; mic pauses while he speaks | No hidden camera capture; no AEC yet, so he must not hear himself |
+| 2026-10-22 | Large files via `scripts/fetch_assets.sh`, never git | Voice files are restricted IP; models are tens of GB |

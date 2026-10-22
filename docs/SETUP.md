@@ -54,16 +54,29 @@ assets/rocky_training_audio_scrubbed.wav
 assets/rocky_voice.pth                # RVC model, optional for XTTS path
 ```
 
-The repository does not include them. Use your private backup or the upstream
-download described in `docs/GUIDE.md`. Then run:
+The repository does not include them. Download them from the upstream author's
+published links (see `docs/GUIDE.md`) with:
+
+```sh
+./scripts/fetch_assets.sh
+```
+
+It asks you to confirm personal, non-commercial use, downloads
+`rocky_training_audio_scrubbed.wav` and `rocky_voice.pth`, checks each file's
+type, makes `rocky_ref_15s.wav` from the first 15 s of speech (with `ffmpeg`),
+and never overwrites files you already have. Unless you pass `--assets-only`,
+it also pulls the Ollama models below and caches the faster-whisper and XTTS
+models, so the first launch does not stall. Add `--yes` to skip the prompt.
+
+If you have your own backup (including the original hand-trimmed 15 s clip),
+copy it instead:
 
 ```sh
 ./scripts/restore_assets.sh /path/to/your/rocky-assets
 ```
 
-The script accepts a directory or a `.tar.gz` archive and verifies the files are
-present and non-empty. It prints the license warning and does not download
-anything.
+That script accepts a directory or a `.tar.gz` archive, verifies the files are
+present and non-empty, and does not download anything.
 
 ### License warning
 
@@ -72,6 +85,8 @@ belongs to the *Project Hail Mary* film production. Do not redistribute the
 assets or use them commercially. See [`NOTICE.md`](../NOTICE.md).
 
 ## 4. Ollama models
+
+`./scripts/fetch_assets.sh` pulls these if they are missing. To do it by hand:
 
 ```sh
 ollama pull qwen3-coder       # brain, ~18 GB

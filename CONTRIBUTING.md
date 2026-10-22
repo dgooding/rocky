@@ -30,9 +30,7 @@ The voice assets are restricted by the upstream license and the film IP. See
 
 ```sh
 ./setup.sh
-./scripts/restore_assets.sh /path/to/your/rocky-assets
-ollama pull qwen3-coder
-ollama pull qwen2.5vl:3b
+./scripts/fetch_assets.sh   # or: ./scripts/restore_assets.sh /path/to/your/rocky-assets
 COQUI_TOS_AGREED=1 ./venv/bin/python rocky_say.py --server start
 ```
 

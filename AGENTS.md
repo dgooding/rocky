@@ -1,79 +1,103 @@
 # Rocky — agent instructions
 
-Rocky is a local-first macOS desk companion: voice in, local Ollama brain,
-Rocky's cloned XTTS voice out, animated eyes, and a webcam look. Start with
-[`HANDOFF.md`](HANDOFF.md) for state, constraints, and phases.
+Rocky is a local-first macOS desk companion: the on-screen version of Casey
+Grothaus's [desk robot](https://github.com/cgro00/desk-robot)
+([video](https://www.youtube.com/shorts/aHSusA0xXjU)). Say "hey Rocky" and he
+looks at you and answers in character, in a cloned voice, with animated eyes.
+Start with [`HANDOFF.md`](HANDOFF.md) for state, constraints, and phases. When
+in doubt about how Rocky should behave, match that robot.
 
-## Current task: run the py-xiaozhi trial on this Mac
+**Scope (owner decision):** work only on this app (`rocky_desktop_app.py` and
+its helpers). Do not add outside apps, trial kits, or new services. Rocky has
+two senses here: **hearing** (hands-free voice recognition) and **sight**
+(webcam).
 
-Before any new real-time voice code is written, test whether existing
-open-source apps can serve as Rocky's foundation. The trial is fully scripted;
-full steps, the human test script, and known gaps are in
-[`docs/XIAOZHI_TRIAL.md`](docs/XIAOZHI_TRIAL.md). Background:
-[`docs/OPEN_SOURCE_OPTIONS.md`](docs/OPEN_SOURCE_OPTIONS.md).
+## Current task: set up Rocky on this Mac and verify his senses
 
-Do this in order:
+Hearing and sight were added on 2026-10-22 and tested only with synthetic
+audio, fake camera frames, and a fake brain. Verify them for real.
 
-1. **Check prerequisites** and tell the user exactly what is missing:
-   - `brew`, `uv` (`brew install uv`), and `ollama` are installed, and Ollama is
-     running (`curl -s http://127.0.0.1:11434/api/tags`).
-   - Rocky's own environment exists: `./venv/bin/python` and voice files in
-     `assets/*.wav`. These are **never on GitHub**. If missing, the user must
-     run `./setup.sh` (needs `python3.11` and `ffmpeg`) and
-     `./scripts/restore_assets.sh /path/to/their/backup`. Ask the user for the
-     backup path; never download or invent voice assets. Without them the trial
-     still runs, but Rocky is silent.
-2. **Run** `./scripts/xiaozhi_trial.sh setup`. It is long (≈1 GB of downloads
-   plus Ollama models) and installs into `~/rocky-xiaozhi-trial`, not this repo.
-3. **Start the server** with `./scripts/xiaozhi_trial.sh server` as a
-   long-running background process (it does not exit). Wait until its log
-   prints the WebSocket/OTA addresses.
-4. **Start the app** with `./scripts/xiaozhi_trial.sh client` in a separate
-   background process. It opens a desktop window the user interacts with.
-5. **Run** `./scripts/xiaozhi_trial.sh doctor` and show the user the result.
-6. **Walk the user through the 8-step test table** in
-   `docs/XIAOZHI_TRIAL.md`. You cannot speak or listen; the user does the
-   physical tests and tells you what happened.
-7. **Record results** in a new file `docs/XIAOZHI_TRIAL_RESULTS.md`: the date,
-   the `doctor` report, the user's answer for each of the 8 steps, errors
-   (with the last ~30 log lines), and a recommendation: **reuse**, **adapt**,
-   or **reject** (fall back to the Pipecat plan in `docs/REALTIME_PLAN.md`).
-   Then tick the matching Phase 0 item in `HANDOFF.md` and `docs/ROADMAP.md`,
-   and commit.
+1. **Install and download** (tell the user exactly what is missing):
+   - `brew install python@3.11 ffmpeg`, Ollama installed and running
+     (`curl -s http://127.0.0.1:11434/api/tags`).
+   - `./setup.sh` (creates `./venv`).
+   - `./scripts/fetch_assets.sh` downloads everything large that is not in git:
+     Rocky's voice files (from the upstream author's published links), the
+     Ollama models, and the faster-whisper and XTTS caches (~23 GB, once). It
+     asks the user to confirm personal, non-commercial use; let the user answer
+     (do not pass `--yes` for them). If they have their own backup,
+     `./scripts/restore_assets.sh /path/to/backup` instead. Never invent or
+     commit voice files.
+2. **Self-test:** `./venv/bin/python rocky_desktop_app.py --selftest`. Expect
+   `ok` for `hearing endpointer`, `hearing ignores a click`, `sight
+   look-intent`, `hearing commands (wake/sleep/track)`, and `sight face
+   detector`.
+3. **Start the voice server** (`make server-start`, ~20 s first load), then
+   build and open the app: `./scripts/make_app.sh && open -n ./Rocky.app`.
+   The bundle is what gets microphone and camera permission on macOS.
+4. **Walk the user through these checks.** You cannot speak or listen; the user
+   does them and tells you what happened. The top-right of the window shows
+   `say "hey Rocky"` (asleep), `awake`, and `watching`.
 
-### Known trouble spots
+   | # | User does | Expected |
+   |---|---|---|
+   | 1 | Talks normally near the Mac without saying his name | No reply (he is asleep) |
+   | 2 | "Hey Rocky" | Eyes look up; indicator shows `awake`; no speech |
+   | 3 | "How are you?" (no name) | He answers in Rocky's voice |
+   | 4 | "What am I holding?" while holding something | Camera look; answer about the object |
+   | 5 | "Rocky, look left" | Eyes turn, then he describes what he sees |
+   | 6 | "Track me", then moves left and right | `watching` shows; camera light on; eyes follow |
+   | 7 | "Stop tracking" | `watching` disappears; camera light off |
+   | 8 | "Rocky, sleep" | "Goodnight, friend."; indicator back to `say "hey Rocky"`; eyes doze |
+   | 9 | F1 hold, speak, release | Push-to-talk still answers without "hey Rocky" |
+   | 10 | Speakers (no headphones), a long answer | He does not answer his own voice |
 
-- **`libopus` not found** (server or client): the script exports
-  `DYLD_FALLBACK_LIBRARY_PATH="$(brew --prefix)/lib"`; confirm
-  `brew list opus` succeeds.
-- **No microphone/camera input, no error**: macOS assigns permission to the
-  app that launched the process (Terminal, iTerm, or VS Code). Have the user
-  allow it in System Settings → Privacy & Security → Microphone/Camera, then
-  restart the client. Running the client from Terminal.app is the simplest
-  check.
-- **Client crashes at startup** around audio/AEC: set `"ENABLED": false` under
-  `AEC_OPTIONS` in `~/rocky-xiaozhi-trial/xiaozhi-data/config/config.json`.
-- **Tool/function-call errors** in the server log: set `Intent: nointent` in
-  `~/rocky-xiaozhi-trial/xiaozhi-esp32-server/main/xiaozhi-server/data/.config.yaml`
-  and restart the server.
-- **Silent replies**: check `curl -s http://127.0.0.1:59720/health`; Rocky's
-  voice server log is `logs/rocky_server.log`.
-- **Memory pressure**: the server must use the `rocky-brain` Ollama alias
-  (8k context), never plain `qwen3-coder`, whose default 262k context uses
-  about 45 GB.
+5. **Record results** in `HANDOFF.md` under "Not yet verified on a Mac": date,
+   self-test output, each check's result, and any errors (last ~30 lines of
+   `~/Library/Logs/Rocky.log`). Tick "Verify hearing and sight on the Mac" in
+   `HANDOFF.md` and `docs/ROADMAP.md` if everything passed.
+6. **Commit and push** to `origin main` (github.com/dgooding/rocky). Never
+   commit `assets/*`, `logs/`, `venv/`, or model caches.
 
-Fix trial problems in `scripts/xiaozhi_trial.sh` or `scripts/xiaozhi/`, not in
-the cloned projects under `~/rocky-xiaozhi-trial`, so fixes reach GitHub.
-`setup` rewrites the server config from `scripts/xiaozhi/server.config.yaml` on
-every run.
+### Tuning and known trouble spots
+
+All hearing/sight knobs are near the top of `rocky_desktop_app.py` or in
+`Endpointer`/`Watcher`:
+
+- **He never wakes:** check the window says `say "hey Rocky"` (F4 toggles
+  hands-free). Look at the subtitle: if faster-whisper writes his name
+  differently, extend `WAKE_PATTERN`. If speech is never detected, lower the
+  floor in `Endpointer.threshold()` (`0.012`).
+- **He wakes on noise or cuts you off:** raise `Endpointer.threshold()`, or
+  raise `end_ms` (700) so pauses do not end your turn. Add any phantom words
+  faster-whisper invents in room noise to `PHANTOM_PHRASES`.
+- **He answers his own voice:** raise the 0.4 s tail in `play_with_envelope`
+  (`quiet_until`). There is no echo cancellation yet.
+- **No mic or camera input, no error:** macOS gives permission to the launching
+  app. Run `Rocky.app` (not a bare `python`), and allow it in System Settings →
+  Privacy & Security → Microphone/Camera.
+- **Eyes follow the wrong way:** flip the sign of `seen[0]` in the gaze code in
+  `run()`. The default assumes the webcam image is not mirrored.
+- **Silent replies:** `curl -s http://127.0.0.1:59720/health`; voice server log
+  is `logs/rocky_server.log`.
+- **`fetch_assets.sh` says a file "is not the expected file type":** the
+  upstream link changed; tell the user and use `restore_assets.sh` with a
+  backup instead.
+
+Natural next upgrades, matching the desk robot: Silero VAD + Smart Turn for
+endpointing; `openWakeWord` so he does not transcribe room talk while asleep.
 
 ## Rules that always apply
 
-- **Never commit voice assets** (`assets/*.wav`, `assets/*.pth`, `*.mp3`) or
-  secrets. The project is CC BY-NC 4.0; Rocky's voice is film IP for personal,
+- **Never commit large or restricted files.** Voice assets (`assets/*.wav`,
+  `assets/*.pth`, `*.mp3`), models, caches, and secrets stay out of git. If a
+  new large file is needed, add its download to `scripts/fetch_assets.sh`. The
+  project is CC BY-NC 4.0; Rocky's voice is film IP for personal,
   non-commercial use only.
 - **Keep the local path working without API keys.** Do not route audio, text,
   or camera frames to a cloud service unless the user explicitly opts in.
+- **No hidden capture.** Watch mode stays opt-in and visibly indicated; the
+  window must always show which senses are on.
 - **Keep the pins in `requirements.txt`** (`numpy==1.26.4`,
   `opencv-python-headless==4.11.0.86`); newer OpenCV pulls numpy 2 and breaks
   XTTS.
@@ -87,7 +111,10 @@ every run.
 | Task | Command |
 |---|---|
 | Install Rocky's dependencies | `./setup.sh` |
+| Download voice files and models (not in git) | `./scripts/fetch_assets.sh` (or `make fetch`) |
 | Start / stop Rocky's voice server | `make server-start` / `make server-stop` |
-| Run the desktop app | `./venv/bin/python rocky_desktop_app.py` |
-| Self-test (eyes, STT, brain, vision, UI) | `make selftest` |
+| Build and open the app | `./scripts/make_app.sh && open -n ./Rocky.app` |
+| Run from source (no camera permission) | `./venv/bin/python rocky_desktop_app.py` |
+| Start with watch mode / without hands-free | `--watch` / `--push-to-talk` |
+| Self-test (eyes, STT, brain, vision, UI, senses) | `make selftest` |
 | Syntax check | `make lint` |

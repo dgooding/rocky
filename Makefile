@@ -1,10 +1,13 @@
 PY := ./venv/bin/python
 PIP := ./venv/bin/pip
 
-.PHONY: setup server-start server-stop server-status app selftest lint clean assets
+.PHONY: setup fetch server-start server-stop server-status app selftest lint clean assets
 
 setup:
 	./setup.sh
+
+fetch:
+	./scripts/fetch_assets.sh
 
 server-start:
 	COQUI_TOS_AGREED=1 $(PY) rocky_say.py --server start
@@ -28,7 +31,7 @@ lint:
 
 assets:
 	@test -f assets/rocky_ref_15s.wav || \
-		(echo "Missing assets. Run ./scripts/restore_assets.sh /path/to/assets"; exit 1)
+		(echo "Missing assets. Run ./scripts/fetch_assets.sh (or restore_assets.sh /path/to/assets)"; exit 1)
 	@echo "assets present"
 
 clean:

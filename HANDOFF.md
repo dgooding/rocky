@@ -14,17 +14,24 @@ Branch: `main`
 
 ## 1. Mission
 
-Make Rocky a convincing **real-time** desk companion:
+Make Rocky a convincing **real-time** desk companion: the on-screen version of
+Casey Grothaus's [desk robot](https://github.com/cgro00/desk-robot)
+([video](https://www.youtube.com/shorts/aHSusA0xXjU)), whose eye presets this
+app already uses. Say "hey Rocky" and he looks at you and answers in character.
+When in doubt about behaviour, match that robot.
 
 - local voice clone (Rocky)
 - local brain (Ollama)
-- local vision (camera)
+- two senses in this app: **hearing** (hands-free voice recognition) and
+  **sight** (webcam)
 - animated eyes and emotions
 - local-first and privacy-preserving
 - speech-end → first audio **under 800 ms**, with barge-in
 
-The current app is a working turn-based prototype. The next job is the real-time
-redesign, not another model swap.
+**Scope decision (2026-10-22, owner):** build on this app only. Outside apps
+were surveyed ([`docs/OPEN_SOURCE_OPTIONS.md`](docs/OPEN_SOURCE_OPTIONS.md)) and
+are not being adopted. Large files are never committed; `scripts/fetch_assets.sh`
+downloads them.
 
 ---
 
@@ -32,25 +39,37 @@ redesign, not another model swap.
 
 ### Working
 
-- Mic push-to-talk → faster-whisper transcription (~0.4 s after release)
+- Hearing: hands-free listening (20 ms frames, adaptive energy endpointing),
+  "hey Rocky" wake, awake 60 s after each exchange, "Rocky, sleep"; mic paused
+  while he thinks or speaks; push-to-talk still available
+- faster-whisper transcription (~0.4 s after you stop talking)
 - Ollama brain streaming (`qwen3-coder:latest`, `num_ctx=8192`)
 - Sentence/clause splitting and TTS prefetch
 - XTTS v2 voice clone via persistent server on `127.0.0.1:59720`
-- pygame UI, subtitles, typed input, 7 emotion presets
-- Webcam snapshot → `qwen2.5vl:3b` vision
+- pygame UI, subtitles, typed input, 7 emotion presets, doze when ignored
+- Sight: "what do you see?" / "what am I holding?" / "look left" / F3 →
+  `qwen2.5vl:3b`; opt-in watch mode ("track me", F5) with local face detection
+  so his eyes follow you
 - macOS `.app` bundle with camera/microphone usage strings
-- `--selftest` for eyes, STT, brain, vision, and UI
+- `--selftest` for eyes, STT, brain, vision, UI, and the hearing/sight logic
+- `scripts/fetch_assets.sh` downloads voice files and models for a fresh clone
 - Public repo with docs, screenshots, setup, restore scripts, issue templates
+
+### Not yet verified on a Mac
+
+The hearing and sight changes were tested with synthetic audio, fake camera
+frames, and a fake brain (22 checks), not with a real microphone, webcam, or
+Ollama. Run the checks in `AGENTS.md` first.
 
 ### Missing / known weak points
 
-- **No barge-in** — listening and speaking are mutually exclusive
-- **No AEC** — cannot safely keep the mic open during playback
+- **No barge-in** — he cannot be interrupted while speaking
+- **No AEC** — so hands-free listening pauses while he speaks
 - **No streaming playback** — `pygame.mixer` plays a complete WAV
-- **No continuous vision** — camera opens only for one snapshot
 - **XTTS is too slow** — measured **2.4–3.8 s per clause**
 - **`inference_stream` is broken** with `transformers==4.44.0` / `torch==2.5.1`
-- **No wake word** — F1 hold / F2 toggle only
+- **Endpointing is a fixed 700 ms pause** — the desk robot uses Silero VAD +
+  Smart Turn, which is the natural next upgrade
 - **CI workflow not pushed** — token lacked `workflow` scope; exact YAML is in
   [`docs/CI.md`](docs/CI.md)
 
@@ -122,16 +141,10 @@ Read order for a new agent:
 
 Tasks:
 
-- [ ] **First:** complete the reuse-first app bake-off in
-  [`docs/OPEN_SOURCE_OPTIONS.md`](docs/OPEN_SOURCE_OPTIONS.md). Evaluate
-  py-xiaozhi as the editable app, Xiaozhi Desktop as a UX-only comparison, and
-  Open WebUI as the local-Ollama voice benchmark. Do not build a new audio core
-  until this fit check is complete. The py-xiaozhi trial is scripted:
-  `./scripts/xiaozhi_trial.sh setup|server|client|doctor`; see
-  [`docs/XIAOZHI_TRIAL.md`](docs/XIAOZHI_TRIAL.md).
-- [ ] Verify target Mac support, offline/local Ollama behavior, AEC/barge-in,
-  current Rocky voice/eyes integration, camera privacy, and source/license
-  terms for any candidate.
+- [x] **Decided (2026-10-22):** build on Rocky's own app; do not adopt an
+  outside app. The survey is kept in
+  [`docs/OPEN_SOURCE_OPTIONS.md`](docs/OPEN_SOURCE_OPTIONS.md) for reference.
+- [ ] Verify hearing and sight on the Mac (see `AGENTS.md`).
 - [ ] Add timestamps: speech-end, STT-final, LLM-first-token, TTS-first-byte,
   first-audio-played, barge-in-stop.
 - [ ] Write one JSONL trace per turn; compute p50/p95 over 20 turns.
@@ -144,8 +157,7 @@ Tasks:
   - Pipecat cascade: Deepgram Nova-3 or Cartesia Ink 2 → local `qwen3-coder`
     → Cartesia Sonic 3.6 or ElevenLabs Flash v2.5
 
-Run the provider A/B only after the app reuse gate says that no ready-made
-candidate meets the required platform/privacy/UX constraints.
+Run the provider A/B after the hearing/sight check on the Mac.
 
 **Exit:** measured baseline; primary engine chosen; fallback chosen.
 
@@ -160,8 +172,9 @@ candidate meets the required platform/privacy/UX constraints.
 
 Tasks:
 
-- [ ] Continuous 16 kHz mono capture with 20 ms frames.
-- [ ] Silero VAD + Smart Turn v3 or provider endpointing (200–300 ms).
+- [x] Continuous 16 kHz mono capture with 20 ms frames (`Ears`, hands-free).
+- [ ] Silero VAD + Smart Turn v3 or provider endpointing (200–300 ms). Today:
+  adaptive energy endpointing with a 700 ms pause (`Endpointer`).
 - [ ] Replace `pygame.mixer` with `sounddevice.RawOutputStream` or PyAudio and a
   PCM ring buffer.
 - [ ] Cancelable TTS/LLM tasks; flush the ring buffer on interrupt.
@@ -206,13 +219,13 @@ Tasks:
 
 Tasks:
 
-- [ ] Background camera capture at 640×480/30 FPS; keep the latest frame.
-- [ ] MediaPipe Face/Hands/Pose or YOLOv8n/YOLO11n at 5–10 FPS.
+- [x] Background camera capture; keep the latest frame (`Watcher`, opt-in).
+- [x] Cheap local detector: OpenCV Haar face cascade at 4 fps; eyes follow the
+  face; arrive/leave events. MediaPipe/YOLO remain options for hands/objects.
 - [ ] Scene-change gating (frame diff or perceptual hash).
-- [ ] On-demand VLM: local Moondream/SmolVLM2/qwen2.5vl, or the realtime
-  session's image input.
-- [ ] Visible camera indicator, explicit look mode, privacy toggle.
-- [ ] Keep `logs/last_look.jpg` for debugging.
+- [x] On-demand VLM from speech ("what am I holding?") via `qwen2.5vl:3b`.
+- [x] Visible camera indicator ("watching"), explicit look mode, privacy toggle (F5).
+- [x] Keep `logs/last_look.jpg` for debugging.
 
 **Exit:** "what am I holding?" <1.5 s; "did the user leave?" <1 s; no VLM at
 30 FPS.
@@ -228,7 +241,8 @@ Tasks:
 
 Tasks:
 
-- [ ] Wake word (`openWakeWord`) or a clear push-to-talk mode.
+- [x] Wake phrase ("hey Rocky", from the transcript) plus push-to-talk.
+  `openWakeWord` would avoid transcribing room talk while he is asleep.
 - [ ] Short conversation memory.
 - [ ] Offline/local fallback when cloud is unavailable.
 - [ ] Cost caps, per-turn limits, kill switch.
@@ -244,12 +258,11 @@ fallback works.
 
 ## 6. Recommended first action
 
-Do **Phase 0** before writing the real-time core:
-
-1. Add latency marks and a JSONL trace.
-2. Measure 20 turns on the current app.
-3. Run the OpenAI Realtime vs Cartesia/ElevenLabs bake-off.
-4. Commit the measurements and the engine decision to this file.
+1. **Verify hearing and sight on the Mac** (`AGENTS.md`): `--selftest`, then a
+   real "hey Rocky" conversation, a look, and watch mode.
+2. Then **Phase 0**: add latency marks and a JSONL trace, measure 20 turns,
+   run the OpenAI Realtime vs Cartesia/ElevenLabs bake-off, and commit the
+   measurements and engine decision to this file.
 
 Do not start by rewriting the UI or swapping the brain. The bottleneck is the
 audio path.
@@ -263,8 +276,8 @@ audio path.
 | Cloud or local-first? | cloud latency vs privacy | Local by default; cloud as opt-in |
 | Primary engine | OpenAI Realtime vs Pipecat cascade | Run both for one day; pick on p95 + voice quality |
 | Voice | OpenAI custom voice vs Cartesia/ElevenLabs clone | Cascade if Rocky's voice matters most |
-| Listening mode | always-on vs wake word vs push-to-talk | Wake word + push-to-talk; always-on only with AEC |
-| Vision | local VLM vs realtime session | Cheap local detector + on-demand VLM |
+| Listening mode | always-on vs wake word vs push-to-talk | **Chosen:** "hey Rocky" + push-to-talk; mic paused while he speaks until AEC exists |
+| Vision | local VLM vs realtime session | **Chosen:** local face detector (opt-in) + on-demand VLM |
 | Budget | per-minute cloud audio | Set a hard monthly cap before Phase 2 |
 
 ---

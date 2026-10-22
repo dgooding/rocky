@@ -11,16 +11,16 @@ The current app is turn-based and blocking. The measured bottleneck is XTTS
 model alone will not fix the feel; the audio path and orchestration have to
 change.
 
-## Before implementation: reuse-first gate
+## Foundation decision
 
-Do not start by building a new realtime core. First complete the app proof of
-fit in [`OPEN_SOURCE_OPTIONS.md`](OPEN_SOURCE_OPTIONS.md): test py-xiaozhi as
-an editable desktop candidate, compare the available Xiaozhi Desktop app as a
-black-box UX reference, and use Open WebUI as a local-Ollama voice benchmark.
-Reuse an app that passes Rocky's platform, local-first, privacy, and voice
-requirements; adapt only the missing pieces. The architecture below is the
-fallback if no ready-made app fits. Pipecat is the preferred orchestration
-framework to evaluate before writing custom audio/VAD/cancellation plumbing.
+Rocky's own app is the foundation (owner decision, 2026-10-22). Outside apps
+were surveyed in [`OPEN_SOURCE_OPTIONS.md`](OPEN_SOURCE_OPTIONS.md) and not
+adopted. The behaviour target is the
+[desk robot](https://github.com/cgro00/desk-robot) Rocky is modelled on, whose
+brain uses faster-whisper, Silero VAD, and Smart Turn; those remain the
+preferred upgrades for the listening path below. Pipecat is still the
+preferred orchestration framework to evaluate before writing custom
+audio/VAD/cancellation plumbing.
 
 ## 1. Target experience
 
