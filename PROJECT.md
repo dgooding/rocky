@@ -22,8 +22,9 @@ the fictional character. The app combines:
 
 - **Speech input** — microphone capture and faster-whisper transcription.
 - **A local brain** — an Ollama chat model, streamed token by token.
-- **Speech output** — Kokoro British English voice by default, with a macOS
-  system voice alternative.
+- **Speech output** — local MLX Drama 3 with a generic British female voice
+  reference, breath cues, and pitch-preserving pace adjustment; Kokoro and macOS
+  voices are alternatives.
 - **A face** — a pygame window with procedural eyes, blinking, gaze, and seven
   emotion presets driven by the reply text and audio amplitude.
 - **Local vision** — a webcam snapshot sent to a small VLM when you press F3.
@@ -34,8 +35,9 @@ Anthropic brains are supported, but no keys are required for the local path.
 The project started as a fork of
 [`Kuberwastaken/rocky-tts`](https://github.com/Kuberwastaken/rocky-tts), which
 provides the voice-transform script and the XTTS/RVC voice pipeline. The desktop
-app uses Kokoro instead; `rocky_say.py` remains a separate legacy tool. The
-eyes, camera path, streaming brain integration, and documentation in this
+app uses a local MLX conversion of Fish Audio Drama 3, referenced with a
+locally generated Kokoro voice; `rocky_say.py` remains a separate legacy tool.
+The eyes, camera path, streaming brain integration, and documentation in this
 repository are the local build.
 
 ---
@@ -44,7 +46,7 @@ repository are the local build.
 
 | Piece | State | Notes |
 |---|---|---|
-| Speech voice | Kokoro `bf_emma` British voice by default; macOS `say` is an alternative |
+| Speech voice | Local MLX Drama 3 with generic British female reference; Kokoro fallback |
 | Mic capture | Working | 16 kHz mono; hands-free (20 ms frames, energy-based speech detection) plus push-to-talk |
 | Speech-to-text | Working | faster-whisper `base.en`, ~0.4 s after you stop talking |
 | Wake word | Working | "hey Rocky" in the transcript; awake 60 s after each exchange; "Rocky, sleep" |
@@ -72,7 +74,7 @@ Measured numbers are in [`docs/LATENCY.md`](docs/LATENCY.md).
 - Python **3.11** (TTS caps at `<3.12`).
 - `ffmpeg`.
 - [Ollama](https://ollama.com/) running locally.
-- Network access on first Kokoro run to cache the local voice model.
+- Network access for the one-time Drama 3 and Kokoro voice-model download.
 
 ```sh
 brew install python@3.11 ffmpeg
@@ -89,7 +91,19 @@ cd rocky
 `setup.sh` creates `./venv`, installs the pinned requirements, and prints the
 next steps. It does **not** download voice assets; step 3.3 does.
 
-### 3.3 Download (or restore) the voice assets and models
+### 3.3 Set up the default local voice
+
+```sh
+./scripts/setup_drama3.sh
+```
+
+This installs MLX-Audio in an isolated `~/.cache/rocky` environment, downloads
+the approximately 22 GiB Drama 3 checkpoint, and creates a generic British
+female voice reference locally using Kokoro. The app uses about 26 GiB peak
+memory while generating speech. The setup is separate from Rocky's pinned
+application environment.
+
+### 3.4 Download (or restore) the legacy voice assets and models
 
 The repo intentionally does not redistribute the voice model or reference
 audio. These files belong in `assets/`:
@@ -134,7 +148,8 @@ ollama pull llama3.2:3b
 
 ### 3.5 Optional legacy voice tool
 
-The desktop app uses Kokoro by default and does not use the cloned Rocky voice.
+The desktop app uses its local Drama 3 voice by default and does not use the
+cloned Rocky voice. Kokoro is available with `--tts-engine kokoro`.
 `rocky_say.py` remains as a separate legacy script. Its private assets and
 server are not required to run the desktop app.
 
@@ -215,7 +230,7 @@ text also selects a mood automatically via `rocky_eyes.mood_for()`.
 │  text  ─► Brain.stream() ─► sentence_stream() ─► clause_split()     │
 │                                      │                              │
 │                                      ▼                              │
-│                         synthesize() ─► Kokoro / optional macOS say  │
+│                         synthesize() ─► Drama 3 / Kokoro / macOS    │
 │                                      │                              │
 │                                      ▼                              │
 │                         speak() ─► sounddevice PCM output           │
@@ -284,14 +299,17 @@ replies. Override with `--brain-context`.
 2. `sentence_stream()` yields completed sentences.
 3. `clause_split()` splits at commas; the first chunk is capped at 38
    characters so the first sound arrives sooner.
-4. `synthesize()` uses Kokoro's British `bf_emma` voice locally by default.
-   `--kokoro-voice` selects another preset; `--tts-engine macos` uses the
-   installed system voice instead.
+4. `synthesize()` sends the clause to a persistent local Drama 3 MLX worker,
+   conditioned on a generic British female voice reference generated locally.
+   `--tts-engine kokoro` selects the British Kokoro fallback;
+   `--tts-engine macos` selects the installed system voice.
 5. `speak()` plays each generated AIFF/WAV as it arrives and publishes an RMS
    envelope for the eyes.
 
-Kokoro's model is cached locally after first use. The standalone
-`rocky_say.py` tool still uses XTTS and its own reference voice assets.
+The Drama 3 model and its isolated runtime are set up with
+`./scripts/setup_drama3.sh` and cached outside the repository. Kokoro's model
+is also cached locally. The standalone `rocky_say.py` tool still uses XTTS and
+its own reference voice assets.
 
 ### 5.5 Vision pipeline
 
@@ -334,7 +352,7 @@ Run the eye-only self-test:
 | `--no-camera` | off | Disable F3 |
 | `--snap PATH` | — | Grab one frame, save, exit (permission test) |
 | `--stt-model` | `base.en` | `tiny.en`, `base.en`, `small.en` |
-| `--tts-engine` | `kokoro` | `kokoro` British voice or `macos` system voice |
+| `--tts-engine` | `drama3` | `drama3`, `kokoro` fallback, or `macos` system voice |
 | `--kokoro-voice` | `bf_emma` | Kokoro voice preset |
 | `--system-voice` | `Samantha` | Installed macOS voice name when selected |
 | `--end-silence-ms` | `700` | Hands-free silence endpoint, 200–2000 ms |
@@ -401,12 +419,19 @@ Measured on the development machine (M1 Max, 64 GB, macOS 27.0.1, Python
 3.11.17). These are wall-clock measurements, not vendor claims.
 
 The XTTS numbers below are a historical baseline for the legacy standalone
-tool, not the desktop app's current Kokoro path. In a single local smoke check
-(2026-10-23), Kokoro took 3.41 s for the first phrase in a process and 0.30 s
-for the next phrase. This is not a statistically meaningful benchmark.
+tool. In a local Drama 3 app-path test, the first synthesis, including worker
+and model startup, took 17.08 s with Ollama models unloaded; the resulting
+tempo-adjusted 5.78 s WAV preserved the complete reply in local Whisper
+transcription. A separate reference-conditioned 11.89 s sample generated in
+10.69 s before the 1.15x tempo adjustment (26.50 GiB peak MLX memory). These
+are single audition measurements, not a broad latency benchmark. A prior
+Kokoro smoke check took 3.41 s for the first phrase in a process and 0.30 s for
+the next phrase.
 
 | Stage | Measurement |
 |---|---|
+| Drama 3 model startup + first app synthesis | 17.08 s (Ollama models unloaded) |
+| Drama 3 peak MLX memory | 26.50 GiB (reference-conditioned audition) |
 | Kokoro first phrase in process | 3.41 s |
 | Kokoro next phrase, same process | 0.30 s |
 | XTTS server load | ~22 s cold |
@@ -501,9 +526,9 @@ The full research-backed plan is in
 [`docs/REALTIME_PLAN.md`](docs/REALTIME_PLAN.md). The short version:
 
 - The current pipeline is turn-based, blocking, and synthesizes a full clause
-  before playback. Kokoro is the selected local default; the user's explicit
-  local-only choice supersedes the hosted/clone alternatives in the research
-  below.
+  before playback. Drama 3 is the selected local default with Kokoro as a local
+  fallback; the user's explicit local-only choice supersedes the hosted/clone
+  alternatives in the research below.
 - Build one realtime core with two interchangeable engines:
   1. **OpenAI Realtime** — custom voice, semantic VAD, native interruption,
      image input; fastest path, cloud dependency.
@@ -539,10 +564,10 @@ Verified facts used in the plan:
 The phased plan, acceptance criteria, and decision points are in
 [`docs/ROADMAP.md`](docs/ROADMAP.md). In order:
 
-1. **Phase 0** — instrument latency; keep models warm; benchmark local Kokoro.
+1. **Phase 0** — instrument latency; keep models warm; benchmark local Drama 3.
 2. **Phase 1** — streaming audio core, VAD, AEC, barge-in, cancelable playback.
-3. **Phase 2** — improve local Kokoro responsiveness and retain a local
-   fallback.
+3. **Phase 2** — improve Drama 3 responsiveness alongside Ollama; retain Kokoro
+   as a local fallback.
 4. **Phase 3** — continuous camera perception with a cheap detector plus an
    on-demand VLM.
 5. **Phase 4** — wake word, memory, offline fallback, cost caps, soak tests,
@@ -577,8 +602,9 @@ does not need a camera.
 
 ## 14. Privacy and security
 
-- Local by default: Ollama at `127.0.0.1:11434`, Kokoro in-process. The legacy
-  XTTS tool uses `127.0.0.1:59720`.
+- Local by default: Ollama at `127.0.0.1:11434`, Drama 3 in a local MLX worker.
+  Kokoro is an in-process fallback. The legacy XTTS tool uses
+  `127.0.0.1:59720`.
 - No telemetry, no analytics, no cloud calls unless you configure a hosted
   brain or cloud voice.
 - The camera is opened only for an explicit look in the current build. A
@@ -613,20 +639,24 @@ does not need a camera.
 ## 16. FAQ
 
 **Does it work without internet?**
-Yes, if the models and assets are already local. Ollama and Kokoro are local.
-The default brain, vision, and voice paths do not call a cloud service.
+Yes, if the models and assets are already local. Ollama, Drama 3, and Kokoro
+are local. The default brain, vision, and voice paths do not call a cloud
+service.
 
 **Why is speech so slow?**
-The active Kokoro path has not been benchmarked for warm synthesis yet. The
-historical XTTS figures (2.4–3.8 s per clause) apply only to the legacy
-standalone tool. The brain is ~0.1–0.2 s. See §8.
+Drama 3's model startup and first synthesis took 17.08 s in a local app-path
+test; the model remains loaded in its worker for later clauses. Its 22 GiB
+checkpoint uses about 26 GiB peak memory during synthesis and can compete with
+Ollama for unified memory. The historical XTTS figures apply only to the
+legacy standalone tool. See §8.
 
 **Can I use a different brain?**
 Yes: `--brain-model`, `--brain-api`, `--brain-url`, `--brain-key`. Any
 OpenAI-compatible endpoint works.
 
 **Can I use a different voice?**
-The desktop app uses Kokoro; select another preset with `--kokoro-voice`, or
+The desktop app uses Drama 3 by default. Use `--tts-engine kokoro` for the
+British Kokoro fallback and select another preset with `--kokoro-voice`, or
 use an installed macOS voice with `--tts-engine macos`. The separate legacy
 `rocky_say.py` tool uses XTTS and a reference clip.
 

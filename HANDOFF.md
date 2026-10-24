@@ -22,7 +22,7 @@ of roleplaying the fictional character or using its cloned voice.
 Earlier voice-engine plans in this handoff are historical; hosted speech or
 voice-clone work requires a new explicit owner decision.
 
-- local British-English TTS (Kokoro `bf_emma` by default)
+- local British-English TTS (Drama 3 by default; Kokoro fallback)
 - local brain (Ollama)
 - two senses in this app: **hearing** (hands-free voice recognition) and
   **sight** (webcam)
@@ -47,13 +47,17 @@ downloads them.
 - faster-whisper transcription (~0.4 s after you stop talking)
 - Ollama brain streaming (`qwen3-coder:latest`, `num_ctx=8192`)
 - Sentence/clause splitting and TTS prefetch
-- Kokoro local British voice (`bf_emma`), cached after first use; macOS `say`
-  is an alternate local voice
+- Drama 3 local British female voice reference with 1.15x pitch-preserving
+  tempo and no inserted breathing effects; Kokoro and macOS `say` are local
+  fallbacks
 - pygame UI, subtitles, typed input, 7 emotion presets, doze when ignored
 - Sight: "what do you see?" / "what am I holding?" / "look left" / F3 →
   `qwen2.5vl:3b`; opt-in watch mode ("track me", F5) with local face detection
   so his eyes follow you
 - macOS `.app` bundle with camera/microphone usage strings
+- Self-diagnosis: `--diagnose` or F6 checks local setup and services; F7/F8
+  perform user-triggered, unsaved microphone/camera checks; spoken diagnosis
+  and bounded local brain/voice recovery are also available (F9)
 - `--selftest` for eyes, STT, brain, vision, UI, and the hearing/sight logic
 - `scripts/fetch_assets.sh` downloads voice files and models for a fresh clone
 - Public repo with docs, screenshots, setup, restore scripts, issue templates
@@ -103,19 +107,92 @@ intermittent synthesis reliability needs monitoring. Webcam permissions/vision,
 the full wake/sleep/watch sequence, and the speaker self-echo check remain
 unverified.
 
-**Fish Audio Drama 3 research (2026-10-23):** the model is explicitly designed
-for directed, expressive, long-form speech and supports natural-language
-performance directions. However, the official installation requirements say
-Drama 3 needs at least 48 GB NVIDIA GPU memory and supports neither CPU nor
-Apple MPS; the H200 streaming figures are not representative of this M1 Max.
-The official Fish Audio web/API path is hosted, so do not send Rocky's replies
-to it unless the owner explicitly opts into that cloud service. Keep Kokoro
-local as the active default; the Fish Audio website can be auditioned manually
-with non-sensitive sample text if the owner wants to compare quality.
+**Fish Audio Drama 3 update (2026-10-23):** the official Fish Audio runtime
+still requires an NVIDIA GPU and does not support Apple MPS, but an unofficial
+Apple-Silicon conversion is available through `mlx-audio`. Downloaded
+`mlx-community/fish-audio-drama-3-4bit` (22 GiB) at revision
+`1ac1b2108b63c2ef5bade463a121569363e293ce` and tested it on the M1 Max in an
+isolated Python 3.11 environment at `~/.cache/rocky/mlx-audio-venv`.
+
+Local test results: model load 5.51 s; with a 256-frame output cap, the first
+streamed audio arrived in 0.82 s and 7.34 s of speech took 5.82 s to generate
+(1.26x real-time), with 25.19 GB peak MLX memory. A separate uncapped first
+sample took 3.73 s to first audio and ran at 0.84x real-time. Repeated
+no-reference generations sometimes ran on for 31-48 seconds and omitted the
+end of the requested line in local Whisper transcription; the bounded sample
+transcribed as requested. Drama 3 therefore needs more auditioning, and a
+voice reference the owner has permission to use is important for a stable
+speaker and accent. The sample was played locally after the Kokoro comparison;
+the owner has not yet provided voice-quality feedback. Temporary WAVs are
+`/tmp/rocky-kokoro-audition.wav` and `/tmp/rocky-drama3-bounded.wav`.
+
+**Five-style audition (2026-10-23):** generated and replayed five local samples
+on the M1 Max, with no voice reference: calm, bright, thoughtful, reassuring,
+and playful. The first four used the same greeting for a delivery comparison;
+the fifth used the shorter line “That sounds like a fun idea.” All five passed
+a local faster-whisper intelligibility check. The four same-text samples took
+6.03–6.74 s to generate 7.99–9.47 s of audio (1.28–1.40x real-time), with
+0.33–0.87 s to first audio and about 25.2 GB peak MLX memory. Samples are
+`/tmp/rocky-drama3-01-calm.wav` through `/tmp/rocky-drama3-05-playful.wav`.
+Ollama's Qwen3 and vision models were unloaded during generation and restored
+afterward.
+
+**Faster voice audition (2026-10-23):** created pitch-preserving 1.15x tempo
+copies of the calm, bright, and playful samples. Their durations are 6.96 s,
+7.88 s, and 1.90 s, respectively. All three passed a local faster-whisper
+transcription check and were played. Original samples remain unchanged; faster
+copies are `/tmp/rocky-drama3-01-calm-faster.wav`,
+`/tmp/rocky-drama3-02-bright-faster.wav`, and
+`/tmp/rocky-drama3-05-playful-faster.wav`.
+
+**British breathy voice audition (2026-10-23):** conditioned Drama 3 on a
+locally generated Kokoro `bf_emma` British female voice reference, with soft
+breath cues, keeping the calm delivery from sample 1. Generated a 1.15x
+pitch-preserving copy to match the previously liked pace. The 10.35 s sample
+passed local transcription and was played. Files:
+`/tmp/rocky-drama3-01-calm-british-breathy.wav` and
+`/tmp/rocky-drama3-01-calm-british-breathy-faster.wav`. This audition used a
+generic synthesized reference voice; it did not use a real person's recording.
+The owner strongly preferred this sample over the prior auditions ("1 billion
+percent better"). Treat a breathier, feminine British voice based on this
+local Kokoro reference as the preferred direction for further TTS evaluation.
+
+**Default voice switch (2026-10-23):** the owner approved the breathier
+British Drama 3 voice as Rocky's default. Added an isolated persistent MLX
+worker, a local setup script, and Kokoro/macOS fallbacks. The app uses the
+same generic Kokoro `bf_emma` reference as the favored audition, with
+1.15x pitch-preserving tempo adjustment. Initially, literal breath cues were
+also added to replies; those were removed after in-app feedback. The model stays outside the
+repository in `~/.cache/huggingface`; the worker environment and generated
+reference stay in `~/.cache/rocky`. The app's pinned requirements are unchanged.
+An initial no-breath-cue smoke test produced a 5.78 s 44.1 kHz WAV and
+transcribed fully; the first model load took 17.08 s with Ollama unloaded.
+Follow-up testing found the generated reference was only 24 kHz, making the
+breath-cued output too quiet. `scripts/setup_drama3.sh` now resamples the
+reference to 44.1 kHz. After rerunning setup, `ffprobe` confirmed 44.1 kHz and
+the default `synthesize()` path produced a 10.34 s WAV at -27.0 dB mean and
+-8.1 dB peak. Local Whisper recognized the main reply but omitted its trailing
+"No rush."; the sample played locally. Actual live use inside the Rocky window
+remains to be tested. The latest sample is
+`/tmp/rocky-default-drama3-british-breathy.wav`.
+Subsequent worker calls reuse the loaded model. Setup instructions are in
+`scripts/setup_drama3.sh`.
+
+**Voice feedback (2026-10-23):** after trying Rocky in the app, the owner
+clarified that "breathy" means a naturally breathy vocal tone, not literal
+breathing sounds at random times. The app no longer inserts inhale or breath
+cues; it retains the British reference voice and 1.15x pace. Restart Rocky to
+load the change and confirm its delivery.
+
+The owner confirms Rocky is for personal use and education, not commercial
+deployment. The checkpoint is an unofficial MLX conversion under the Fish
+Audio Community License. No text or audio was sent to Fish Audio. The app's
+pinned dependencies remain unchanged; Kokoro `bf_emma` is the local fallback.
 
 **Voice update (2026-10-23):** after rejecting the robotic sound of installed
 macOS voices, the owner selected a local open-source British TTS. The app now
-defaults to Kokoro `bf_emma` and a natural, non-character assistant prompt.
+defaults to a generic British Drama 3 voice and a natural, non-character
+assistant prompt.
 Kokoro generated a valid 24 kHz WAV and played through the app's PCM path; the
 owner said it was closer. It is not claimed to match ElevenLabs. Kokoro weights
 are Apache-licensed; model card grades voice data quality subjectively and
@@ -128,11 +205,11 @@ statistically meaningful benchmark.
 - **No automatic voice barge-in** — F1 can stop playback and start push-to-talk;
   hands-free interruption still waits for echo cancellation
 - **No AEC** — so hands-free listening pauses while he speaks
-- **TTS is not streamed** — Kokoro synthesizes the clause before the app plays
+- **TTS is not streamed** — Drama 3 synthesizes the clause before the app plays
   its 20 ms PCM blocks
-- **Kokoro latency is not yet measured** — first model load/synthesis took
-  ~10.8 s including initial model/dependency setup; warm performance needs a
-  separate benchmark
+- **Drama 3 has a cold first-use delay** — first app synthesis including model
+  load took ~17 s in a test with Ollama unloaded; warm multi-turn latency needs
+  a separate benchmark
 - Legacy XTTS measurements remain in `docs/LATENCY.md`; XTTS is not the app's
   active voice path
 - **`inference_stream` is broken** with `transformers==4.44.0` / `torch==2.5.1`
@@ -147,6 +224,8 @@ statistically meaningful benchmark.
 |---|---:|
 | Kokoro first phrase in process | 3.41 s (single smoke check) |
 | Kokoro next phrase in same process | 0.30 s (single smoke check) |
+| Drama 3 first app synthesis | 17.08 s including worker/model load (Ollama unloaded) |
+| Drama 3 synthesis peak memory | 26.50 GiB (reference-conditioned sample) |
 | Legacy XTTS per clause | 2.4–3.8 s |
 | End-to-end first sound | ~3–5 s |
 | Brain first token (warm) | 0.07–0.15 s |
@@ -220,13 +299,14 @@ Tasks:
 - [ ] Write one JSONL trace per turn; compute p50/p95 over 20 turns.
 - [ ] Keep `qwen3-coder` and `qwen2.5vl` resident; verify with
   `curl -s http://127.0.0.1:11434/api/ps`.
-- [ ] Benchmark warm synthesis for local Kokoro.
-- [ ] Compare British Kokoro presets with the user.
+- [ ] Benchmark warm synthesis for local Drama 3 while Ollama is resident.
+- [x] Compare local British voice auditions; owner selected the breathier
+  reference-conditioned Drama 3 voice.
 
 Run voice checks locally; do not route voice or other data to a cloud service
 without explicit user opt-in.
 
-**Exit:** local pipeline baseline measured; Kokoro default and macOS fallback
+**Exit:** local pipeline baseline measured; Drama 3 default and Kokoro fallback
 characterized.
 
 **Files likely touched:** `rocky_desktop_app.py`, new `rocky_metrics.py`,
@@ -263,11 +343,11 @@ self-hearing with speakers at normal volume.
 
 ### Phase 2 — Voice engine (2–3 days)
 
-**Goal:** improve local Kokoro responsiveness and retain a local fallback.
+**Goal:** improve local Drama 3 responsiveness and retain a local fallback.
 
 Tasks:
 
-- [ ] Optimize and benchmark Kokoro synthesis for the default British preset.
+- [ ] Benchmark warm Drama 3 synthesis and memory use alongside Ollama.
 - [ ] Keep the macOS system voice available as a local fallback.
 - [ ] Tune first-clause length and TTS continuations.
 
@@ -339,8 +419,8 @@ audio path.
 | Decision | Options | Default recommendation |
 |---|---|---|
 | Cloud or local-first? | cloud latency vs privacy | Local by default; cloud as opt-in |
-| Primary engine | local Kokoro, with local macOS fallback | **Chosen:** local-only by default |
-| Voice | Kokoro British preset vs installed macOS voice | **Chosen:** Kokoro `bf_emma`; no cloned character voice |
+| Primary engine | local Drama 3 through MLX | **Chosen:** local-only by default; Kokoro fallback |
+| Voice | Drama 3 with generic Kokoro British reference | **Chosen:** breathier feminine British voice; no cloned character voice |
 | Listening mode | always-on vs wake word vs push-to-talk | **Chosen:** "hey Rocky" + push-to-talk; mic paused while he speaks until AEC exists |
 | Vision | local VLM vs realtime session | **Chosen:** local face detector (opt-in) + on-demand VLM |
 | Budget | per-minute cloud audio | Set a hard monthly cap before Phase 2 |

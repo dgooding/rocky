@@ -2,7 +2,7 @@
 """
 Rocky - a desk companion you can talk to.
 
-Speak (or type) -> local speech-to-text -> local LLM -> British Kokoro speech,
+Speak (or type) -> local speech-to-text -> local LLM -> British Drama 3 speech,
 with eyes that morph through emotion presets and bounce to the audio.
 
 Everything runs on this machine; no cloud, no keys.
@@ -28,20 +28,28 @@ Controls
     F3 or Space               look through the camera
     F4                        hands-free listening on/off
     F5                        webcam watching on/off
+    F6                        run local setup diagnostics
+    F7                        test microphone (short, unsaved input check)
+    F8                        test camera (one unsaved frame)
+    F9                        try safe local recovery checks
     type + Enter              same, by keyboard
     1-7                       force an emotion (when the input line is empty)
     Esc                       quit
 
-Speech defaults to local Kokoro with a British voice preset. Sentences are
-generated ahead of playback, so a multi-sentence reply does not stutter between
-sentences.
+Speech defaults to local Fish Audio Drama 3 through MLX, using a locally
+generated British voice reference. Kokoro remains available as a fallback.
+Sentences are generated ahead of playback, so a multi-sentence reply does not
+stutter between sentences.
 """
 from __future__ import annotations
 
 import argparse
+import atexit
 import base64
 import collections
+from dataclasses import dataclass
 import http.client
+import importlib.util
 import io
 import json
 import math
@@ -49,6 +57,8 @@ import os
 import queue
 import random
 import re
+import select
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -56,6 +66,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from urllib.parse import urlsplit
 
 import numpy as np
 import pygame
@@ -78,7 +89,7 @@ WARN = (240, 150, 150)
 REC = (255, 90, 90)
 FPS = 60
 FONT_NAME = "menlo,monospace"
-HINT = "F1 talk/interrupt  F2 talk  F3 look  F4 hands-free  F5 watch  Esc quit"
+HINT = "F1 talk  F2 toggle  F3 look  F4 hear  F5 watch  F6 check  F9 fix"
 
 LISTENING, THINKING, SPEAKING, IDLE = "LISTENING", "THINKING", "SPEAKING", "IDLE"
 LABELS = {LISTENING: "listening...", THINKING: "thinking...", SPEAKING: "speaking"}
@@ -118,6 +129,33 @@ LOOK_PATTERN = re.compile(
     r"|see (this|me|my))\b",
     re.IGNORECASE,
 )
+DIAGNOSE_REQUEST_PATTERN = re.compile(
+    r"\b(diagnos\w*|self[- ]?test|check yourself|run (a )?(system )?check)\b",
+    re.IGNORECASE,
+)
+REPAIR_REQUEST_PATTERN = re.compile(
+    r"\b(fix|repair|resolve|sort out)\b.*\b(this|that|it|issue|problem|error|"
+    r"broken|not working|not responding|slow|wrong|mic|microphone|camera|"
+    r"voice|sound|hearing|vision)\b|\b(fix|repair|resolve) (it|this|that)\b",
+    re.IGNORECASE,
+)
+
+
+@dataclass(frozen=True)
+class RecoveryRequest:
+    mic_test: bool
+    camera_test: bool
+    brain_voice: bool
+
+
+def recovery_request_for(text: str) -> RecoveryRequest:
+    mic_test = bool(re.search(
+        r"\b(mic|microphone|hearing)\b", text, re.IGNORECASE))
+    camera_test = bool(re.search(
+        r"\b(camera|vision|sight)\b", text, re.IGNORECASE))
+    return RecoveryRequest(mic_test, camera_test, not (mic_test or camera_test))
+
+
 # "look left" turns his eyes that way before he looks (the robot turns its head).
 LOOK_DIRECTIONS = {"left": (7.0, 0.0), "right": (-7.0, 0.0), "up": (0.0, -4.0),
                    "down": (0.0, 4.0)}
@@ -144,11 +182,21 @@ face_pos = None      # (x, y) in -1..1 of the face the webcam sees, or None
 awake_until = 0.0    # hands-free answers without "hey Rocky" until this time
 gaze_override = None  # ((x, y), until) - where he was asked to look
 response_cancel = threading.Event()
-TTS_ENGINE = "kokoro"
+TTS_ENGINE = "drama3"
 SYSTEM_VOICE = "Samantha"
 SYSTEM_VOICE_RATE = 185
 KOKORO_VOICE = "bf_emma"
 _KOKORO_PIPELINE = None
+DRAMA3_REVISION = "1ac1b2108b63c2ef5bade463a121569363e293ce"
+DRAMA3_REPO = "mlx-community/fish-audio-drama-3-4bit"
+DRAMA3_REFERENCE_TEXT = (
+    "Hello there. I'm glad you're here. Take your time, and tell me what's "
+    "on your mind."
+)
+DRAMA3_SPEED = 1.15
+_DRAMA3_PROCESS: subprocess.Popen | None = None
+_DRAMA3_LOCK = threading.Lock()
+_MIC_PROBE_LOCK = threading.Lock()
 
 
 # --- audio --------------------------------------------------------------
@@ -311,6 +359,8 @@ class Ears:
     def __init__(self, end_silence_ms: int = 700) -> None:
         self.enabled = False
         self.error = ""
+        self.frames_received = 0
+        self.last_frame_at = 0.0
         self.stream = None
         self.frames: queue.Queue = queue.Queue(maxsize=500)
         self.endpointer = Endpointer(self.RATE, 1000 * self.FRAME // self.RATE,
@@ -355,8 +405,10 @@ class Ears:
     def _cb(self, indata, frames, time_info, status):
         try:
             self.frames.put_nowait(indata[:, 0].copy())
+            self.frames_received += 1
+            self.last_frame_at = time.monotonic()
         except queue.Full:
-            pass
+            self.error = "audio queue full; input frames are being dropped"
 
     def can_hear(self) -> bool:
         return (self.enabled and not mic_recording and state in (IDLE, LISTENING)
@@ -774,6 +826,318 @@ class Brain:
             pass
 
 
+def is_local_ollama_host(host: str) -> bool:
+    parsed = urlsplit(host)
+    return parsed.scheme == "http" and parsed.hostname in {"localhost", "127.0.0.1", "::1"}
+
+
+def diagnose_system(brain: Brain, transcriber: Transcriber, camera=None,
+                    ears=None, watcher=None, *, live: bool = False,
+                    mic_test: bool = False, camera_test: bool = False):
+    """Run local setup checks without opening the microphone or camera."""
+    checks = []
+
+    def add(status: str, name: str, detail: str) -> None:
+        checks.append((status, name, detail))
+
+    py_ok = sys.version_info[:2] == (3, 11)
+    add("OK" if py_ok else "FAIL", "Python",
+        sys.version.split()[0])
+    for module in ("numpy", "pygame", "soundfile", "sounddevice",
+                   "faster_whisper", "cv2"):
+        present = importlib.util.find_spec(module) is not None
+        add("OK" if present else "FAIL", f"Python module {module}",
+            "installed" if present else "missing; run ./setup.sh")
+
+    try:
+        import sounddevice as sd
+        devices = sd.query_devices()
+        inputs = [device["name"] for device in devices if device["max_input_channels"]]
+        outputs = [device["name"] for device in devices if device["max_output_channels"]]
+        add("OK" if inputs else "WARN", "Microphone devices",
+            ", ".join(inputs[:3]) if inputs else "none enumerated; check macOS permission")
+        add("OK" if outputs else "FAIL", "Speaker devices",
+            ", ".join(outputs[:3]) if outputs else "none enumerated")
+        add("INFO", "Audio capture",
+            "not opened by diagnostics; F7 performs a brief, unsaved mic test")
+    except Exception as error:
+        add("WARN", "Audio devices", f"could not enumerate: {error}")
+
+    try:
+        import cv2
+        cascade = cv2.CascadeClassifier(
+            os.path.join(cv2.data.haarcascades, "haarcascade_frontalface_default.xml"))
+        add("OK" if not cascade.empty() else "FAIL", "Face detector",
+            "OpenCV cascade available" if not cascade.empty() else "cascade file missing")
+    except Exception as error:
+        add("FAIL", "Face detector", str(error))
+    camera_state = "watching" if watcher is not None and watcher.enabled else "closed"
+    add("INFO", "Camera", f"not opened by diagnostics (current state: {camera_state}); "
+        "F8 performs a one-frame, unsaved camera test")
+
+    if not brain.enabled:
+        add("INFO", "Brain service", "disabled with --no-brain")
+    elif brain.api != "ollama":
+        add("INFO", "Brain service", f"not probed (configured API: {brain.api}); "
+            "diagnostics never send data to hosted services")
+    elif not is_local_ollama_host(brain.host):
+        add("WARN", "Brain service", "configured endpoint is not local; not contacted")
+    else:
+        try:
+            with urllib.request.urlopen(f"{brain.host}/api/tags", timeout=3) as response:
+                models = [item["name"] for item in
+                          json.loads(response.read()).get("models", [])]
+            if brain.model in models:
+                add("OK", "Ollama brain model", f"{brain.model} installed")
+            else:
+                add("FAIL", "Ollama brain model",
+                    f"{brain.model} not installed; available: {', '.join(models[:5]) or 'none'}")
+            if brain.vision_model in models:
+                add("OK", "Ollama vision model", f"{brain.vision_model} installed")
+            else:
+                add("WARN", "Ollama vision model",
+                    f"{brain.vision_model} not installed; camera answers may fail")
+            with urllib.request.urlopen(f"{brain.host}/api/ps", timeout=3) as response:
+                loaded = [item["name"] for item in
+                          json.loads(response.read()).get("models", [])]
+            if brain.model in loaded:
+                add("OK", "Brain warm state", f"{brain.model} is loaded")
+            else:
+                add("WARN", "Brain warm state",
+                    "model is installed but not loaded; first reply may be slower")
+        except Exception as error:
+            add("FAIL", "Ollama service",
+                f"not reachable at {brain.host}: {error}")
+
+    if transcriber.model is not None:
+        add("OK", "Speech recognition", f"{transcriber.size} is loaded")
+    else:
+        cache = os.path.expanduser(
+            f"~/.cache/huggingface/hub/models--Systran--faster-whisper-{transcriber.size}")
+        add("OK" if os.path.isdir(cache) else "WARN", "Speech model cache",
+            f"{transcriber.size} cached" if os.path.isdir(cache) else
+            f"{transcriber.size} not loaded in this process; it may need a download")
+
+    if TTS_ENGINE == "drama3":
+        python = os.path.expanduser(os.environ.get(
+            "ROCKY_DRAMA3_PYTHON", "~/.cache/rocky/mlx-audio-venv/bin/python"))
+        model = os.path.expanduser(os.environ.get(
+            "ROCKY_DRAMA3_MODEL",
+            f"~/.cache/huggingface/hub/models--{DRAMA3_REPO.replace('/', '--')}"
+            f"/snapshots/{DRAMA3_REVISION}"))
+        reference = os.path.expanduser(os.environ.get(
+            "ROCKY_DRAMA3_REFERENCE", "~/.cache/rocky/drama3-british-female-reference.wav"))
+        for name, path in (("Drama 3 runtime", python), ("Drama 3 model", model),
+                           ("Voice reference", reference)):
+            exists = os.path.exists(path)
+            add("OK" if exists else "FAIL", name,
+                path if exists else f"missing: {path}")
+        runtime_ok = os.path.isfile(python) and os.access(python, os.X_OK)
+        if os.path.exists(python) and not runtime_ok:
+            add("FAIL", "Drama 3 runtime permissions", f"not executable: {python}")
+        if os.path.isfile(reference):
+            try:
+                info = sf.info(reference)
+                valid = info.samplerate == 44100 and info.channels == 1 and info.frames > 0
+                add("OK" if valid else "FAIL", "Voice reference format",
+                    f"{info.samplerate} Hz, {info.channels} channel(s)")
+            except Exception as error:
+                add("FAIL", "Voice reference format", str(error))
+        add("OK" if shutil.which("ffmpeg") else "FAIL", "FFmpeg",
+            shutil.which("ffmpeg") or "missing; install with brew install ffmpeg")
+        worker_ready = (_DRAMA3_PROCESS is not None and
+                        _DRAMA3_PROCESS.poll() is None)
+        add("OK" if worker_ready else "WARN", "Drama 3 warm state",
+            "voice worker is loaded" if worker_ready else
+            "not loaded in this process; first speech loads the model "
+            "(about 26 GiB peak memory)")
+    elif TTS_ENGINE == "kokoro":
+        add("OK" if importlib.util.find_spec("kokoro") else "FAIL", "Kokoro TTS",
+            "installed" if importlib.util.find_spec("kokoro") else "missing")
+    else:
+        add("OK" if os.path.exists("/usr/bin/say") else "FAIL", "macOS TTS",
+            "/usr/bin/say available" if os.path.exists("/usr/bin/say") else "say not found")
+
+    add("INFO", "Hands-free hearing",
+        "active" if ears is not None and ears.enabled else
+        "off; press F4 to enable or F7 to test the microphone")
+    if ears is not None and ears.error:
+        add("WARN", "Microphone status", ears.error)
+    if watcher is not None and watcher.error:
+        add("WARN", "Camera status", watcher.error)
+    if pygame.display.get_init():
+        add("OK", "Rocky window", "display initialized")
+
+    if mic_test:
+        ok, detail = probe_microphone(ears)
+        add("OK" if ok else "FAIL", "Microphone test", detail)
+    if camera_test:
+        ok, detail = probe_camera(camera, watcher)
+        add("OK" if ok else "FAIL", "Camera test", detail)
+
+    if live:
+        if brain.api != "ollama" or not is_local_ollama_host(brain.host):
+            add("WARN", "Live brain test",
+                "skipped because the configured brain is not local Ollama")
+        else:
+            try:
+                started = time.monotonic()
+                reply = brain.reply("Reply with exactly: Rocky brain check passed.")
+                elapsed = time.monotonic() - started
+                add("OK" if reply else "FAIL", "Live brain test",
+                    f"{elapsed:.2f}s; {reply[:100]}" if reply else
+                    "Ollama returned no text")
+            except Exception as error:
+                add("FAIL", "Live brain test", str(error))
+        try:
+            started = time.monotonic()
+            spoken, audio = synthesize("Rocky voice check.")
+            samples, rate = sf.read(io.BytesIO(audio), dtype="float32")
+            valid = bool(spoken and len(samples) and rate > 0)
+            add("OK" if valid else "FAIL", "Live voice synthesis",
+                f"{time.monotonic() - started:.2f}s; {len(samples) / rate:.2f}s audio"
+                if valid else "synthesis returned empty audio")
+        except Exception as error:
+            add("FAIL", "Live voice synthesis", str(error))
+        add("INFO", "Live-test limits",
+            "speech was synthesized but not played; mic and camera were not opened")
+
+    failures = sum(status == "FAIL" for status, _, _ in checks)
+    warnings = sum(status == "WARN" for status, _, _ in checks)
+    lines = ["Rocky self-diagnosis", time.strftime("%Y-%m-%d %H:%M:%S"),
+             f"Summary: {failures} failure(s), {warnings} warning(s)", ""]
+    lines.extend(f"[{status}] {name}: {detail}" for status, name, detail in checks)
+    report = "\n".join(lines)
+    try:
+        path = os.path.join(rocky.LOGS_DIR, "diagnostics.txt")
+        with open(path, "w", encoding="utf-8") as output:
+            output.write(report + "\n")
+        report += f"\n\nSaved: {path}"
+    except OSError as error:
+        report += f"\n\nCould not save report: {error}"
+    return failures == 0, report, failures, warnings
+
+
+def repair_local_issues(brain: Brain, transcriber: Transcriber, camera=None,
+                        ears=None, watcher=None, *, mic_test: bool = False,
+                        camera_test: bool = False,
+                        brain_voice: bool = True):
+    """Run requested local device checks and optionally exercise brain/voice."""
+    live_report = ""
+    if brain_voice:
+        _, live_report, _, _ = diagnose_system(
+            brain, transcriber, camera, ears, watcher, live=True)
+    ok, report, failures, warnings = diagnose_system(
+        brain, transcriber, camera, ears, watcher,
+        mic_test=mic_test, camera_test=camera_test)
+    recovery = [line for line in live_report.splitlines()
+                if line.startswith(("[OK] Live brain test:", "[FAIL] Live brain test:",
+                                    "[WARN] Live brain test:", "[OK] Live voice synthesis:",
+                                    "[FAIL] Live voice synthesis:",
+                                    "[WARN] Live voice synthesis:"))]
+    if brain_voice:
+        report += "\n\nRecovery checks attempted:\n" + (
+            "\n".join(recovery) if recovery else "No live recovery checks completed.")
+    else:
+        report += ("\n\nRecovery action:\n"
+                   "Ran only the requested device check; skipped model loading.")
+    failures += sum(line.startswith("[FAIL]") for line in recovery)
+    warnings += sum(line.startswith("[WARN]") for line in recovery)
+    report = re.sub(
+        r"Summary: \d+ failure\(s\), \d+ warning\(s\)",
+        f"Summary: {failures} failure(s), {warnings} warning(s)",
+        report, count=1,
+    )
+    try:
+        path = os.path.join(rocky.LOGS_DIR, "diagnostics.txt")
+        with open(path, "w", encoding="utf-8") as output:
+            output.write(report + "\n")
+    except OSError as error:
+        report += f"\nCould not save recovery report: {error}"
+    return failures == 0, report, failures, warnings
+
+
+def probe_microphone(ears=None, duration: float = 0.8) -> tuple[bool, str]:
+    """Check input activity without saving captured audio."""
+    global mic_recording
+    if mic_recording:
+        return False, "microphone is already recording; try again when idle"
+    if not _MIC_PROBE_LOCK.acquire(blocking=False):
+        return False, "another microphone diagnostic is already running"
+    was_enabled = ears is not None and ears.enabled
+    probe = Mic()
+    ok, detail = False, ""
+    mic_recording = True
+    try:
+        if was_enabled:
+            ears.stop()
+        if not probe.start():
+            detail = f"could not open microphone: {probe.error}"
+        else:
+            time.sleep(duration)
+            audio = probe.stop()
+            if audio is None or not len(audio):
+                detail = "microphone opened but returned no audio"
+            else:
+                peak = float(np.abs(audio).max())
+                rms = float(np.sqrt(np.mean(np.square(audio))))
+                ok = True
+                detail = (f"input received (RMS {rms:.4f}, peak {peak:.4f}); "
+                          "audio not saved")
+                if peak < 0.001:
+                    detail = (f"input stream opened but was very quiet (peak {peak:.4f}); "
+                              "speak during the test to confirm level")
+    except Exception as error:
+        detail = f"microphone test failed: {error}"
+    finally:
+        if probe.stream is not None:
+            try:
+                probe.stop()
+            except Exception as error:
+                detail += f"; stream close failed: {error}"
+                ok = False
+        if was_enabled:
+            restart_error = ""
+            try:
+                restarted = ears.start()
+            except Exception as error:
+                restarted = False
+                restart_error = str(error)
+            if not restarted:
+                if detail:
+                    detail += "; "
+                detail += f"hands-free restart failed: {restart_error or ears.error}"
+                ok = False
+        mic_recording = False
+        _MIC_PROBE_LOCK.release()
+    return ok, detail
+
+
+def probe_camera(camera, watcher=None) -> tuple[bool, str]:
+    """Capture and inspect one local frame; never save or upload it."""
+    if camera is None:
+        return False, "camera is disabled with --no-camera"
+    try:
+        import cv2
+        if watcher is not None and watcher.enabled:
+            frame = watcher.latest()
+            source = "existing watch stream"
+            if frame is None:
+                return False, "watch mode is on but no fresh frame is available"
+        else:
+            frame_bytes = camera.snapshot()
+            frame = cv2.imdecode(np.frombuffer(frame_bytes, np.uint8), cv2.IMREAD_COLOR)
+            source = "one frame"
+        if frame is None or not frame.size:
+            return False, "camera returned an invalid frame"
+        mean = float(frame.mean())
+        detail = f"{frame.shape[1]}x{frame.shape[0]} frame; mean brightness {mean:.1f}"
+        note = "; very dark, check lens/light if unexpected" if mean < 2 else ""
+        return True, f"{source}: {detail}{note}; not saved or uploaded"
+    except Exception as error:
+        return False, str(error)
+
+
 def split_sentences(text: str, limit: int = 150):
     """Sentence-ish chunks, each short enough to synthesize in one breath."""
     parts = re.split(r"(?<=[.!?])\s+", " ".join(text.split()))
@@ -791,7 +1155,84 @@ def split_sentences(text: str, limit: int = 150):
 
 # --- pipeline -----------------------------------------------------------
 def synthesize(text: str):
-    global _KOKORO_PIPELINE
+    global _KOKORO_PIPELINE, _DRAMA3_PROCESS
+    if TTS_ENGINE == "drama3":
+        python = os.path.expanduser(
+            os.environ.get("ROCKY_DRAMA3_PYTHON", "~/.cache/rocky/mlx-audio-venv/bin/python")
+        )
+        model = os.path.expanduser(
+            os.environ.get(
+                "ROCKY_DRAMA3_MODEL",
+                f"~/.cache/huggingface/hub/models--{DRAMA3_REPO.replace('/', '--')}"
+                f"/snapshots/{DRAMA3_REVISION}",
+            )
+        )
+        reference = os.path.expanduser(
+            os.environ.get(
+                "ROCKY_DRAMA3_REFERENCE",
+                "~/.cache/rocky/drama3-british-female-reference.wav",
+            )
+        )
+        worker = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                              "rocky_drama3_worker.py")
+        missing = [path for path in (python, model, reference, worker)
+                   if not os.path.exists(path)]
+        if missing:
+            raise RuntimeError(
+                "Drama 3 is not set up; run ./scripts/setup_drama3.sh "
+                f"(missing: {', '.join(missing)})"
+            )
+        with _DRAMA3_LOCK:
+            if _DRAMA3_PROCESS is None or _DRAMA3_PROCESS.poll() is not None:
+                _DRAMA3_PROCESS = subprocess.Popen(
+                    [python, worker, "--model", model,
+                     "--ref-audio", reference, "--ref-text", DRAMA3_REFERENCE_TEXT],
+                    stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                    text=True, encoding="utf-8", bufsize=1,
+                )
+            process = _DRAMA3_PROCESS
+            if process.stdin is None or process.stdout is None:
+                raise RuntimeError("Drama 3 worker pipes failed to initialize")
+            try:
+                process.stdin.write(json.dumps({"text": text}) + "\n")
+                process.stdin.flush()
+                ready, _, _ = select.select([process.stdout], [], [], 180)
+                if not ready:
+                    process.terminate()
+                    process.wait(timeout=10)
+                    _DRAMA3_PROCESS = None
+                    raise RuntimeError("Drama 3 synthesis timed out after 180 seconds")
+                response = process.stdout.readline()
+                if not response:
+                    _DRAMA3_PROCESS = None
+                    raise RuntimeError("Drama 3 worker exited before returning audio")
+                payload = json.loads(response)
+            except (BrokenPipeError, OSError, json.JSONDecodeError) as error:
+                _DRAMA3_PROCESS = None
+                raise RuntimeError(f"Drama 3 worker communication failed: {error}") from error
+            if "error" in payload:
+                raise RuntimeError(f"Drama 3 synthesis failed: {payload['error']}")
+            try:
+                wav_bytes = base64.b64decode(payload["audio"], validate=True)
+            except (KeyError, ValueError) as error:
+                raise RuntimeError(f"Drama 3 returned invalid audio data: {error}") from error
+
+        ffmpeg = shutil.which("ffmpeg")
+        if ffmpeg is None:
+            raise RuntimeError("ffmpeg is required to match Rocky's preferred 1.15x voice pace")
+        try:
+            result = subprocess.run(
+                [ffmpeg, "-hide_banner", "-loglevel", "error", "-i", "pipe:0",
+                 "-filter:a", f"atempo={DRAMA3_SPEED}", "-f", "wav", "pipe:1"],
+                input=wav_bytes, capture_output=True, check=False, timeout=30,
+            )
+        except subprocess.TimeoutExpired as error:
+            raise RuntimeError("ffmpeg timed out while adjusting Drama 3 speech speed") from error
+        if result.returncode or not result.stdout:
+            detail = result.stderr.decode("utf-8", errors="replace").strip()
+            raise RuntimeError(f"ffmpeg could not adjust Drama 3 speech speed: {detail}")
+        return text, result.stdout
+
     if TTS_ENGINE == "kokoro":
         if _KOKORO_PIPELINE is None:
             from kokoro import KPipeline
@@ -821,6 +1262,33 @@ def synthesize(text: str):
                 return text, audio_file.read()
 
     raise RuntimeError(f"unsupported TTS engine: {TTS_ENGINE}")
+
+
+def stop_drama3_worker() -> None:
+    global _DRAMA3_PROCESS
+    with _DRAMA3_LOCK:
+        process, _DRAMA3_PROCESS = _DRAMA3_PROCESS, None
+        if process is None:
+            return
+        if process.poll() is None:
+            try:
+                if process.stdin is not None:
+                    process.stdin.write('{"shutdown": true}\n')
+                    process.stdin.flush()
+                process.wait(timeout=15)
+            except (BrokenPipeError, OSError, subprocess.TimeoutExpired):
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
+        for pipe in (process.stdin, process.stdout):
+            if pipe is not None:
+                pipe.close()
+
+
+atexit.register(stop_drama3_worker)
 
 
 def clause_split(sentence: str, first: bool = False, first_limit: int = 38,
@@ -887,7 +1355,8 @@ def speak(sentences, cancel_event: threading.Event | None = None) -> None:
             for sentence in sentences:
                 if cancel_event is not None and cancel_event.is_set():
                     break
-                for chunk in clause_split(sentence, first=first):
+                chunks = clause_split(sentence, first=first)
+                for chunk in chunks:
                     if cancel_event is not None and cancel_event.is_set():
                         break
                     if not enqueue(synthesize(chunk)):
@@ -961,7 +1430,26 @@ def say_line(line: str, cancel_event: threading.Event | None = None) -> None:
     state = IDLE
 
 
-def worker(transcriber: Transcriber, brain: Brain, camera, watcher=None) -> None:
+def recovery_message(report: str, failures: int, warnings: int,
+                     brain_voice: bool = True) -> str:
+    if failures:
+        details = [line.split(": ", 1)[-1] for line in report.splitlines()
+                   if line.startswith("[FAIL]")]
+        action = "safe recovery checks" if brain_voice else "requested device check"
+        return (f"I ran the {action}. Still needs attention: "
+                + "; ".join(details[:2]) + ". I saved the full report.")
+    if warnings:
+        if not brain_voice:
+            return (f"The requested device check passed, with {warnings} unrelated "
+                    "setup warning(s). I saved the details.")
+        return ("Recovery checks passed. I warmed my local response paths; "
+                f"{warnings} warning(s) remain. I saved the details.")
+    if brain_voice:
+        return "Recovery checks passed. I warmed my local brain and voice."
+    return "The requested device check passed. I did not load unrelated models."
+
+
+def worker(transcriber: Transcriber, brain: Brain, camera, watcher=None, ears=None) -> None:
     global state, subtitle, note, eyes_emotion, awake_until, gaze_override
     while True:
         job = jobs.get()
@@ -1015,6 +1503,36 @@ def worker(transcriber: Transcriber, brain: Brain, camera, watcher=None) -> None
             wake = WAKE_PATTERN.match(text)
             if wake is not None and text[wake.end():].strip():
                 text = text[wake.end():].strip()
+
+            if DIAGNOSE_REQUEST_PATTERN.search(text):
+                _, report, failures, warnings = diagnose_system(
+                    brain, transcriber, camera, ears=ears, watcher=watcher)
+                print(report, file=sys.stderr)
+                if failures:
+                    summary = f"I found {failures} issue(s) and {warnings} warning(s)."
+                elif warnings:
+                    summary = f"My checks found no failures, but {warnings} warning(s)."
+                else:
+                    summary = "My local checks passed."
+                say_line(f"{summary} I saved the report in logs/diagnostics.txt.",
+                         response_cancel)
+                stay_awake()
+                continue
+
+            if REPAIR_REQUEST_PATTERN.search(text):
+                state = THINKING
+                recovery_request = recovery_request_for(text)
+                _, report, failures, warnings = repair_local_issues(
+                    brain, transcriber, camera, ears=ears, watcher=watcher,
+                    mic_test=recovery_request.mic_test,
+                    camera_test=recovery_request.camera_test,
+                    brain_voice=recovery_request.brain_voice)
+                print(report, file=sys.stderr)
+                say_line(recovery_message(
+                    report, failures, warnings, recovery_request.brain_voice),
+                         response_cancel)
+                stay_awake()
+                continue
 
             if SLEEP_PATTERN.match(text):
                 awake_until = 0.0
@@ -1108,7 +1626,7 @@ def run(mic: Mic, transcriber: Transcriber, brain: Brain, camera=None,
     clock = pygame.time.Clock()
     eyes = rocky_eyes.Eyes()
 
-    threading.Thread(target=worker, args=(transcriber, brain, camera, watcher),
+    threading.Thread(target=worker, args=(transcriber, brain, camera, watcher, ears),
                      daemon=True).start()
     threading.Thread(target=transcriber.warm, daemon=True).start()
     threading.Thread(target=brain.warm, daemon=True).start()
@@ -1124,6 +1642,40 @@ def run(mic: Mic, transcriber: Transcriber, brain: Brain, camera=None,
     gaze = (0.0, 0.0)
     running = True
 
+    def diagnose_in_background() -> None:
+        global note
+        note = "running local self-diagnosis..."
+        ok, report, failures, warnings = diagnose_system(
+            brain, transcriber, camera, ears, watcher)
+        print(report, file=sys.stderr)
+        note = f"diagnosis: {failures} failure(s), {warnings} warning(s); see logs/diagnostics.txt"
+
+    def microphone_test_in_background() -> None:
+        global note
+        note = "checking mic; speak now (audio not saved)..."
+        ok, detail = probe_microphone(ears)
+        note = f"mic {'ok' if ok else 'check'}: {detail}"[:68]
+        print(f"[diagnostics] microphone: {'OK' if ok else 'FAIL'}: {detail}",
+              file=sys.stderr)
+
+    def camera_test_in_background() -> None:
+        global note
+        note = "checking camera; one frame, not saved..."
+        ok, detail = probe_camera(camera, watcher)
+        note = f"camera {'ok' if ok else 'check'}: {detail}"[:68]
+        print(f"[diagnostics] camera: {'OK' if ok else 'FAIL'}: {detail}",
+              file=sys.stderr)
+
+    def repair_in_background() -> None:
+        global note
+        note = "checking and warming local brain and voice..."
+        ok, report, failures, warnings = repair_local_issues(
+            brain, transcriber, camera, ears, watcher)
+        print(report, file=sys.stderr)
+        summary = recovery_message(report, failures, warnings)
+        note = f"recovery: {failures} failure(s), {warnings} warning(s); see logs/diagnostics.txt"
+        say_line(summary, response_cancel)
+
     while running:
         now = time.monotonic()
         dt = clock.get_time() / 1000 or 1 / FPS
@@ -1135,6 +1687,9 @@ def run(mic: Mic, transcriber: Transcriber, brain: Brain, camera=None,
                 if e.key == pygame.K_ESCAPE:
                     running = False
                 elif e.key == pygame.K_F1:
+                    if mic_recording and not recording:
+                        note = "microphone diagnostic is running"
+                        continue
                     if state in (THINKING, SPEAKING):
                         response_cancel.set()
                         brain.cancel()
@@ -1142,6 +1697,9 @@ def run(mic: Mic, transcriber: Transcriber, brain: Brain, camera=None,
                     recording = mic.start()
                     mic_recording = recording
                 elif e.key == pygame.K_F2:
+                    if mic_recording and not recording:
+                        note = "microphone diagnostic is running"
+                        continue
                     if recording:
                         audio = mic.stop()
                         recording = False
@@ -1152,6 +1710,9 @@ def run(mic: Mic, transcriber: Transcriber, brain: Brain, camera=None,
                 elif e.key == pygame.K_F3 or (e.key == pygame.K_SPACE and not typed):
                     jobs.put({"look": True})
                 elif e.key == pygame.K_F4 and ears is not None:
+                    if mic_recording:
+                        note = "microphone diagnostic is running"
+                        continue
                     if ears.enabled:
                         ears.stop()
                         if state == LISTENING and not recording:
@@ -1169,6 +1730,16 @@ def run(mic: Mic, transcriber: Transcriber, brain: Brain, camera=None,
                         note = "watching on - camera stays open"
                     else:
                         note = f"watching failed: {watcher.error}"
+                elif e.key == pygame.K_F6:
+                    threading.Thread(target=diagnose_in_background, daemon=True).start()
+                elif e.key == pygame.K_F7:
+                    threading.Thread(target=microphone_test_in_background,
+                                     daemon=True).start()
+                elif e.key == pygame.K_F8:
+                    threading.Thread(target=camera_test_in_background,
+                                     daemon=True).start()
+                elif e.key == pygame.K_F9:
+                    threading.Thread(target=repair_in_background, daemon=True).start()
                 elif e.key == pygame.K_RETURN and typed.strip():
                     jobs.put({"text": typed.strip()})
                     typed = ""
@@ -1245,7 +1816,10 @@ def selftest(no_brain: bool) -> int:
     """Prove the parts that do not need a human in front of the mic."""
     os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
     os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
-    ok = True
+    voice_ok = TTS_ENGINE == "drama3" and DRAMA3_SPEED == 1.15
+    print(f"[selftest] default local voice: "
+          f"{TTS_ENGINE} at {DRAMA3_SPEED:.2f}x -> {'ok' if voice_ok else 'FAIL'}")
+    ok = voice_ok
 
     brain = Brain(enabled=not no_brain)
     print(f"[selftest] ollama reachable: {brain.available()}")
@@ -1374,6 +1948,24 @@ def senses_selftest() -> bool:
           f"{'ok' if response_limits_ok else 'FAIL'}")
     ok = ok and response_limits_ok
 
+    diagnostic_intents_ok = (
+        DIAGNOSE_REQUEST_PATTERN.search("Rocky, diagnose yourself")
+        and REPAIR_REQUEST_PATTERN.search("Please fix this")
+        and REPAIR_REQUEST_PATTERN.search("fix the microphone")
+        and REPAIR_REQUEST_PATTERN.search("fix the camera")
+        and REPAIR_REQUEST_PATTERN.search("repair the slow response")
+        and not REPAIR_REQUEST_PATTERN.search("fix dinner for tonight")
+        and recovery_request_for("fix my microphone")
+        == RecoveryRequest(True, False, False)
+        and recovery_request_for("fix the camera")
+        == RecoveryRequest(False, True, False)
+        and recovery_request_for("fix this")
+        == RecoveryRequest(False, False, True)
+    )
+    print(f"[selftest] spoken diagnosis/repair intents: "
+          f"{'ok' if diagnostic_intents_ok else 'FAIL'}")
+    ok = ok and bool(diagnostic_intents_ok)
+
     cancel = threading.Event()
 
     class CancellingBrain:
@@ -1396,6 +1988,34 @@ def senses_selftest() -> bool:
               and blocks[2][1] == 0.0)
     print(f"[selftest] PCM playback chunks: {'ok' if pcm_ok else 'FAIL'}")
     ok = ok and pcm_ok
+
+    local_host_ok = (
+        is_local_ollama_host("http://localhost:11434")
+        and is_local_ollama_host("http://127.0.0.1:11434")
+        and not is_local_ollama_host("http://localhost.example.com:11434")
+    )
+    print(f"[selftest] diagnostics restrict brain probes to local Ollama: "
+          f"{'ok' if local_host_ok else 'FAIL'}")
+    ok = ok and local_host_ok
+
+    try:
+        import cv2
+
+        class FakeCamera:
+            def snapshot(self):
+                success, encoded = cv2.imencode(
+                    ".jpg", np.full((24, 32, 3), 96, dtype=np.uint8))
+                if not success:
+                    raise RuntimeError("synthetic JPEG encoding failed")
+                return encoded.tobytes()
+
+        camera_ok, _ = probe_camera(FakeCamera())
+    except Exception as error:
+        print(f"[selftest] camera diagnostic: {error}")
+        camera_ok = False
+    print(f"[selftest] camera diagnostic handles a synthetic frame: "
+          f"{'ok' if camera_ok else 'FAIL'}")
+    ok = ok and camera_ok
 
     try:
         import cv2
@@ -1438,13 +2058,23 @@ def main() -> None:
                     help="tiny.en / base.en / small.en")
     ap.add_argument("--end-silence-ms", type=int, default=700, metavar="MS",
                     help="quiet time before hands-free utterances end (200-2000; default 700)")
-    ap.add_argument("--tts-engine", choices=["kokoro", "macos"], default="kokoro",
-                    help="local speech voice: British Kokoro (default) or macOS system voice")
+    ap.add_argument("--tts-engine", choices=["drama3", "kokoro", "macos"], default="drama3",
+                    help="local speech voice: Drama 3 (default), Kokoro, or macOS system")
     ap.add_argument("--system-voice", default="Samantha",
                     help="installed macOS voice name for --tts-engine macos (default Samantha)")
     ap.add_argument("--kokoro-voice", default="bf_emma",
                     help="Kokoro voice preset (default bf_emma, British English)")
     ap.add_argument("--selftest", action="store_true", help="verify stt/brain/eyes, no mic")
+    ap.add_argument("--diagnose", action="store_true",
+                    help="check local setup and save logs/diagnostics.txt; no mic/camera capture")
+    ap.add_argument("--repair", action="store_true",
+                    help="run local brain/voice recovery checks and warm them; no arbitrary commands")
+    ap.add_argument("--diagnose-live", action="store_true",
+                    help="with --diagnose, also run local brain and voice synthesis (may load models)")
+    ap.add_argument("--diagnose-mic", action="store_true",
+                    help="with --diagnose, briefly test the mic; captured audio is not saved")
+    ap.add_argument("--diagnose-camera", action="store_true",
+                    help="with --diagnose, capture one frame; it is not saved or uploaded")
     args = ap.parse_args()
 
     if not 200 <= args.end_silence_ms <= 2000:
@@ -1456,9 +2086,32 @@ def main() -> None:
     TTS_ENGINE, SYSTEM_VOICE, KOKORO_VOICE = (
         args.tts_engine, args.system_voice, args.kokoro_voice
     )
-    selected_voice = (f" ({KOKORO_VOICE})" if TTS_ENGINE == "kokoro" else
+    selected_voice = (f" ({DRAMA3_REPO})" if TTS_ENGINE == "drama3" else
+                      f" ({KOKORO_VOICE})" if TTS_ENGINE == "kokoro" else
                       f" ({SYSTEM_VOICE})" if TTS_ENGINE == "macos" else "")
     print(f"[voice] {TTS_ENGINE}{selected_voice}", file=sys.stderr)
+
+    if (args.diagnose or args.repair or args.diagnose_live or
+            args.diagnose_mic or args.diagnose_camera):
+        host = args.brain_url or ("http://localhost:11434"
+                                  if args.brain_api == "ollama" else "")
+        brain = Brain(model=args.brain_model, host=host or "http://localhost:11434",
+                      enabled=not args.no_brain, api=args.brain_api,
+                      api_key=args.brain_key, vision_model=args.vision_model,
+                      context=args.brain_context)
+        camera = None if args.no_camera else Camera(args.camera_index)
+        watcher = None if camera is None else Watcher(camera)
+        transcriber = Transcriber(args.stt_model)
+        if args.repair:
+            ok, report, failures, warnings = repair_local_issues(
+                brain, transcriber, camera, Ears(), watcher)
+        else:
+            ok, report, failures, warnings = diagnose_system(
+                brain, transcriber, camera, Ears(), watcher,
+                live=args.diagnose_live, mic_test=args.diagnose_mic,
+                camera_test=args.diagnose_camera)
+        print(report)
+        sys.exit(0 if ok else 1)
 
     if args.snap:
         try:

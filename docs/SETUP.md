@@ -25,6 +25,20 @@ cd rocky
 `setup.sh` creates `./venv`, upgrades pip, and installs
 [`requirements.txt`](../requirements.txt). It does not download voice assets.
 
+The desktop app's default Drama 3 voice has a separate isolated setup because
+its MLX dependencies and model are large and must not replace the app's pinned
+NumPy/Torch stack:
+
+```sh
+./scripts/setup_drama3.sh
+```
+
+This downloads about 22 GiB into the Hugging Face cache and creates a generic
+British female Kokoro reference in `~/.cache/rocky`. It needs network access
+only for setup; app inference is local. Drama 3 peaks around 26 GiB memory
+while generating. The app offers Kokoro as a fallback with
+`--tts-engine kokoro`.
+
 Manual equivalent:
 
 ```sh

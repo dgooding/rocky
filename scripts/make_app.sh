@@ -13,6 +13,9 @@ LAUNCHER="$MACOS/Rocky"
 if [[ ! -x "$ROOT/venv/bin/python" ]]; then
   echo "WARNING: $ROOT/venv/bin/python not found. Run ./setup.sh first." >&2
 fi
+if [[ ! -x "$HOME/.cache/rocky/mlx-audio-venv/bin/python" ]]; then
+  echo "WARNING: Drama 3 voice not set up. Run ./scripts/setup_drama3.sh first." >&2
+fi
 
 rm -rf "$APP"
 mkdir -p "$MACOS"

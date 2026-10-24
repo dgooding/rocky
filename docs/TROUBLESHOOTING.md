@@ -1,5 +1,28 @@
 # Troubleshooting
 
+## Self-diagnosis
+
+Run a non-invasive setup check from the project directory:
+
+```sh
+./venv/bin/python rocky_desktop_app.py --diagnose
+```
+
+The report is also saved as `logs/diagnostics.txt`. In the running app, press
+F6 for the same checks, F7 to briefly test the microphone, or F8 to capture one
+camera frame. Device tests are user-triggered; audio and images are not saved
+or uploaded. `--diagnose-live` additionally tests local brain response and
+voice synthesis without playback, but may load the large voice model and use
+substantial memory.
+
+In the app, say "Rocky, diagnose yourself" for a spoken summary. Say "Rocky,
+fix this" or "fix the slow response" (or press F9) to test and warm the local
+brain and voice paths. This is a bounded recovery flow, not arbitrary code
+execution: it will not install software, alter macOS permissions, or delete
+files. If you specifically ask it to fix the microphone or camera, it runs the
+corresponding unsaved hardware check. Remaining issues are listed in
+`logs/diagnostics.txt`.
+
 ## Camera
 
 ### The camera light never turns on
@@ -170,10 +193,11 @@ own backup:
 
 ### The voice sounds wrong or robotic
 
-For the desktop app, Kokoro is the default local voice. Try another preset with
-`--kokoro-voice`; `--tts-engine macos` selects an installed system voice.
-Kokoro's warm latency and voice quality across presets have not yet been
-benchmarked.
+For the desktop app, Drama 3 is the default local voice. If it is not set up,
+run `./scripts/setup_drama3.sh`. It uses about 26 GiB peak memory while
+generating, so close or unload other large local models if macOS reports memory
+pressure. For the fallback voice, run with `--tts-engine kokoro`; `--kokoro-voice`
+selects a preset. `--tts-engine macos` selects an installed system voice.
 
 The following asset advice applies only to the separate legacy `rocky_say.py`
 XTTS tool:

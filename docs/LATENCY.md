@@ -37,7 +37,19 @@ blocks to the output device, but its device latency has not yet been measured.
 | `qwen2.5vl:3b` vision | ~0.4 s warm / ~6 s after swap | Ollama |
 | End-to-end first sound | ~3–5 s | Dominated by XTTS |
 
-The brain is not the bottleneck. XTTS is.
+The historical figures above are not a benchmark of the current Drama 3
+default. A warm local brain can answer quickly; a cold voice-model load or
+synthesis can still dominate time to first sound.
+
+## Lightweight brain smoke test (2026-10-23)
+
+Using the app's `Brain.stream()` path on the same machine, `llama3.2:3b`
+returned a two-sentence answer in 2.28 s on its first request (including model
+load). Two warm `"How are you?"` requests returned in 0.29 s and 0.19 s, with
+first text at 0.15 s and 0.04 s. These are individual checks, not p50/p95
+benchmarks. `llama3.2:3b` is installed locally and can be selected for a
+temporary app run with `--brain-model llama3.2:3b`; the default remains
+`qwen3-coder:latest`.
 
 ## Reproduce the TTS numbers
 

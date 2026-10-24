@@ -9,7 +9,8 @@ in doubt about the interaction style, use a natural, concise assistant voice.
 
 **Scope (owner decision):** work only on this app (`rocky_desktop_app.py` and
 its helpers). Do not add outside apps or cloud services. The assistant uses
-Kokoro's local British voice and a neutral, conversational personality; do not
+local Drama 3 with a generic British female reference, gentle breath cues, and
+a neutral, conversational personality. Kokoro is the local fallback; do not
 reintroduce the cloned Rocky voice or character mannerisms.
 
 ## Current task: set up Rocky on this Mac and verify his senses
@@ -21,17 +22,18 @@ audio, fake camera frames, and a fake brain. Verify them for real.
    - `brew install python@3.11 ffmpeg`, Ollama installed and running
      (`curl -s http://127.0.0.1:11434/api/tags`).
    - `./setup.sh` (creates `./venv`).
-   - Kokoro `bf_emma` (British English) is the default local voice; the model
-     is cached on first use. The legacy standalone `rocky_say.py` tool still
-     needs private Rocky voice assets if used. `./scripts/fetch_assets.sh`
-     downloads those assets and additional model caches (~23 GB); it asks for
-     personal, non-commercial-use confirmation. Let the user answer (never
-     pass `--yes` for them). Never invent or commit voice files.
+   - `./scripts/setup_drama3.sh` installs the isolated MLX runtime, downloads
+     Drama 3 (~22 GB), and creates a generic British reference locally using
+     Kokoro. The legacy standalone `rocky_say.py` tool still needs private
+     Rocky voice assets if used. `./scripts/fetch_assets.sh` also calls the
+     Drama 3 setup after its personal-use confirmation. Never invent or commit
+     voice files.
 2. **Self-test:** `./venv/bin/python rocky_desktop_app.py --selftest`. Expect
    `ok` for `hearing endpointer`, `hearing ignores a click`, `sight
    look-intent`, `hearing commands (wake/sleep/track)`, and `sight face
    detector`.
-3. No voice server is needed for the default Kokoro voice. Build and open:
+3. No voice server is needed. After setting up the Drama 3 voice, build and
+   open:
    `./scripts/make_app.sh && open -n ./Rocky.app`.
    The bundle is what gets microphone and camera permission on macOS.
 4. **Walk the user through these checks.** You cannot speak or listen; the user

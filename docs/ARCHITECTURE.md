@@ -14,10 +14,13 @@ Rocky.app (launcher shell)
     ├── ears thread: continuous mic frames → Endpointer → jobs (hands-free)
     ├── watcher thread (watch mode only): webcam → face detection → face_pos, jobs
     ├── TTS producer thread (one per reply): synthesize ahead of playback
-    └── startup warmers: Kokoro voice, whisper model, brain model
+    └── startup warmers: whisper model, brain model
 
 rocky_say.py --server start (standalone legacy tool)
 └── separate process: XTTS v2 + HTTP server on 127.0.0.1:59720
+
+rocky_drama3_worker.py (started lazily for default speech)
+└── isolated MLX runtime: Drama 3 model + local British voice reference
 
 Ollama
 ├── qwen3-coder:latest  (brain, streamed)
@@ -27,8 +30,8 @@ Ollama
 The main thread never blocks on network or model work. The worker owns the
 conversation pipeline. The TTS producer is a per-reply daemon thread feeding a
 bounded `queue.Queue(maxsize=3)` so synthesis can run ahead of playback without
-unbounded memory growth. Speech is generated locally by Kokoro by default;
-macOS `say` is an alternative backend. The legacy XTTS tool is separate.
+unbounded memory growth. Speech is generated locally by Drama 3 by default;
+Kokoro and macOS `say` are alternatives. The legacy XTTS tool is separate.
 
 ## State
 
@@ -42,8 +45,8 @@ The UI reads module-level state:
 
 The worker and audio callback update these; the render loop snapshots them at
 60 FPS. This is intentionally simple. F1 can cancel the active text response
-and playback to start push-to-talk. An in-process Kokoro synthesis request already in flight
-may finish in the background. Automatic voice interruption is not enabled
+and playback to start push-to-talk. A Drama 3 synthesis request already in
+flight may finish in the background. Automatic voice interruption is not enabled
 because the microphone remains paused during playback to avoid self-hearing.
 A real-time build should replace this with a small thread-safe state object plus
 an asyncio event bus.
@@ -93,11 +96,19 @@ be synthesized while the rest of the reply is still being generated.
 
 ### 4. Voice
 
-By default, `synthesize()` uses Kokoro's `bf_emma` British English voice and
-returns 24 kHz PCM in a WAV container. `KPipeline` is loaded once per app
-process; weights are downloaded and cached on first use. Select another preset
-with `--kokoro-voice`. `--tts-engine macos` uses the installed system voice.
-The separate legacy `rocky_say.py` tool continues to use XTTS and voice assets.
+By default, `synthesize()` sends text to a persistent local worker running
+Fish Audio Drama 3 through MLX. The worker loads the model once, conditions
+generation on a locally generated Kokoro `bf_emma` British female voice
+reference, and returns WAV audio to the app. The app adds no breathing effects
+and applies a 1.15x pitch-preserving tempo adjustment.
+The worker uses an isolated Python environment and model cache at
+`~/.cache/rocky`; run `./scripts/setup_drama3.sh` to prepare them. The
+22 GiB model peaks around 26 GiB of memory, so other large models may compete
+for unified memory.
+
+Kokoro remains available with `--tts-engine kokoro` and `--kokoro-voice`.
+`--tts-engine macos` uses an installed system voice. The separate legacy
+`rocky_say.py` tool continues to use XTTS and voice assets.
 
 ### 5. Playback
 

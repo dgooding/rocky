@@ -2,10 +2,12 @@
 
 Status: **proposal, not implemented**
 
-**Current voice decision (2026-10-23):** the desktop app uses local Kokoro
-`bf_emma` with a neutral assistant personality. This document preserves earlier
-hosted and cloned-voice research; none of those options are approved for
-implementation without explicit user opt-in.
+**Current voice decision (2026-10-23):** the desktop app defaults to local MLX
+Drama 3, conditioned on a locally generated British female Kokoro reference,
+without inserted breathing effects and with a slightly faster pace. Kokoro
+remains a local fallback.
+This document preserves earlier hosted and cloned-voice research; the app
+remains local-first.
 
 Goal: make Rocky feel like a real-time presence — speech starts in well under a
 second, he can be interrupted, the camera is aware of the scene, and the whole
@@ -13,7 +15,7 @@ thing survives real-world noise and network problems.
 
 The current app is turn-based and blocking. Historical XTTS measurements
 (2.4–3.8 s per clause) apply only to the legacy standalone tool, not the
-desktop app's current Kokoro voice path. Replacing the model alone will not
+desktop app's current Drama 3 voice path. Replacing the model alone will not
 fix the feel; the audio path and orchestration have to change.
 
 ## Foundation decision
@@ -265,8 +267,9 @@ be fine-tuned, which is a different workflow.
   first-audio-played, barge-in-stop.
 - Log p50/p95 over 20 turns; store a small JSONL trace.
 - Keep brain and vision models warm; avoid Ollama swaps.
-- Benchmark warm Kokoro synthesis and first-audio latency.
-- Compare local British Kokoro presets with the user.
+- Benchmark warm Drama 3 synthesis and first-audio latency.
+- Measure Drama 3 memory use while Ollama is resident.
+- Keep Kokoro as a tested local fallback.
 
 **Exit:** a measured baseline for the selected local voice path.
 
@@ -284,7 +287,8 @@ self-hearing.
 
 ### Phase 2 — Local voice responsiveness (2–3 days)
 
-- Optimize and benchmark Kokoro for the default British preset.
+- Optimize and benchmark Drama 3 for the selected British preset.
+- Keep Kokoro available as a local fallback.
 - Keep the macOS system voice available as a local fallback.
 - Tune first-clause length and TTS continuations.
 

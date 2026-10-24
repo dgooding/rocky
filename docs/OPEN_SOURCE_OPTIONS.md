@@ -43,6 +43,36 @@ for local voice chat, but not a Rocky app replacement.
 | [Hyori / live2d-Live-Assistant](https://github.com/JSNrepo/live2d-Live-Assistant) | MIT-licensed Live2D voice companion; Gemini Live streaming with barge-in; offline fallback. | Cloud-first (Gemini) and bundles a large autonomous agent and remote-control surface. Small project. | **Reference only** for the voice/avatar experience. |
 | [OpenVoiceOS](https://github.com/OpenVoiceOS/ovos-core) | Apache-2.0 voice-assistant platform with installer, skills, and LLM persona plugins. | Smart-speaker platform, not an on-screen companion. | **Not the closest fit.** |
 
+## Updated review (2026-10-23)
+
+The useful pattern is a small, well-tested component or architecture—not a
+replacement assistant. Rocky already has its own local UI, voice path, camera,
+and diagnostics. The current research points to these targeted opportunities:
+
+| Project | Verified pattern | Rocky decision |
+|---|---|---|
+| [openWakeWord](https://github.com/dscripka/openWakeWord) | Local 16 kHz wake-word inference, with optional VAD gating and debounce controls. Its latest tagged release is older than its latest commit. | Candidate for an optional wake prefilter. Compare false wakes, missed wakes, idle CPU, and startup/model cost against the existing transcribed wake phrase before adoption. Check model-file terms separately from the Apache-2.0 code license. |
+| [Silero VAD](https://github.com/snakers4/silero-vad) | Streaming speech boundaries with speech thresholds, minimum silence, and padding; supports 8/16 kHz audio. The repository's linked MIT license and README badge disagree, so model and redistribution terms need verification. | Best next endpointing experiment if Rocky's current energy threshold causes cutoffs or sluggish turns. Benchmark against the existing endpoint and keep the pause user-configurable; do not add it as a dependency yet. |
+| [Home Assistant Assist pipeline](https://github.com/home-assistant/core/tree/dev/homeassistant/components/assist_pipeline) | Separates wake, STT, intent, and TTS stages and reports stage events, progress, and errors. | Adopt the observability pattern in Rocky: make each turn's stages, timing, cancellation, and failure visible. Do not import its broader integration/runtime architecture. |
+| [Leon](https://github.com/leon-ai/leon) | Separates skills, actions, tools, and functions, including deterministic controlled actions. Its current 2.0 architecture is still evolving. | Adopt narrow typed actions and confirmations for consequential behavior, not unrestricted shell or browser access. A small immutable `RecoveryRequest` now maps mic/camera requests to only those local checks, avoiding unrelated model loads. |
+| [OpenJarvis](https://github.com/open-jarvis/OpenJarvis) | Local-first assistant platform with tools/skills, diagnostics, and evaluation/trace concepts; Apache-2.0. | Useful architecture reference for doctor/evaluation workflows, but too broad to replace or add to Rocky's app-only design. |
+| [Hugging Face speech-to-speech](https://github.com/huggingface/speech-to-speech) and [Pipecat](https://github.com/pipecat-ai/pipecat) | Swappable local speech stages and streaming/turn-taking pipeline patterns; Apache-2.0 and BSD-2-Clause respectively. | Keep as references for a measured VAD/turn-taking bake-off. Neither is a complete Rocky-like companion, and replacing the working local voice stack needs a separate decision. |
+| [Open-LLM-VTuber](https://github.com/Open-LLM-VTuber/Open-LLM-VTuber) | Closest ready-made voice/avatar companion among the candidates reviewed earlier. | Best product to compare against, not to transplant: adopting it would replace Rocky's existing app and conflict with the owner decision above. |
+
+### Adopted versus still under evaluation
+
+- **Adopted:** recovery requests now resolve to a typed, bounded set of local
+  checks. A microphone or camera repair request does not warm the unrelated
+  brain or large speech model. Tests cover the routing.
+- **Not adopted:** no third-party framework, wake model, VAD model, voice
+  assets, or assistant application was added. The next worthwhile experiment
+  is a measured VAD comparison if real use shows endpoint problems; wake-word
+  detection is a separate experiment.
+- **Not copied wholesale:** upstream code and models have separate license
+  terms. Rocky is CC BY-NC 4.0, so permissive upstream licenses do not by
+  themselves settle compatibility with Rocky's distribution. Prefer an
+  independently implemented pattern unless code reuse is reviewed first.
+
 ### Screened out
 
 - **py-xiaozhi, xiaozhi-esp32-server, and Xiaozhi Desktop.** Technically
@@ -108,6 +138,17 @@ required notices and review the complete upstream and dependency licenses.
   and [web UI language fallback](https://github.com/Open-LLM-VTuber/Open-LLM-VTuber-Web/blob/main/src/renderer/src/i18n.ts)
 - [Hugging Face speech-to-speech README](https://github.com/huggingface/speech-to-speech/blob/main/README.md)
 - [Pipecat README](https://github.com/pipecat-ai/pipecat/blob/main/README.md)
+- [openWakeWord README](https://github.com/dscripka/openWakeWord/blob/main/README.md),
+  [version metadata](https://github.com/dscripka/openWakeWord/blob/main/pyproject.toml),
+  and [license](https://github.com/dscripka/openWakeWord/blob/main/LICENSE)
+- [Silero VAD README](https://github.com/snakers4/silero-vad/blob/master/README.md),
+  [streaming VAD implementation](https://github.com/snakers4/silero-vad/blob/master/src/silero_vad/utils_vad.py),
+  and [license](https://github.com/snakers4/silero-vad/blob/master/LICENSE)
+- [Home Assistant Assist pipeline models](https://github.com/home-assistant/core/blob/dev/homeassistant/components/assist_pipeline/models.py),
+  [pipeline](https://github.com/home-assistant/core/blob/dev/homeassistant/components/assist_pipeline/pipeline.py),
+  and [Apache-2.0 license](https://github.com/home-assistant/core/blob/dev/LICENSE.md)
+- [OpenJarvis repository](https://github.com/open-jarvis/OpenJarvis)
+  and [Apache-2.0 license](https://github.com/open-jarvis/OpenJarvis/blob/main/LICENSE)
 - [Open WebUI README](https://github.com/open-webui/open-webui/blob/main/README.md)
   and [license](https://github.com/open-webui/open-webui/blob/main/LICENSE)
 - [RealtimeVoiceChat README](https://github.com/KoljaB/RealtimeVoiceChat/blob/main/README.md)

@@ -15,7 +15,7 @@ you explicitly configure a hosted brain or a cloud voice.
 
 | Piece | State |
 |---|---|
-| Speech voice | Kokoro `bf_emma` (British English) by default; local macOS voice available as an alternative |
+| Speech voice | Local MLX Drama 3 with a generic British female voice reference; Kokoro fallback |
 | Hearing: hands-free, "hey Rocky" wake, sleep command | Working (energy-based speech detection; untested on hardware yet) |
 | Mic → speech-to-text (faster-whisper) | Working, ~0.4 s after you stop talking |
 | Brain (Ollama `qwen3-coder:latest`, streaming) | Working, ~0.1 s warm first token |
@@ -41,16 +41,26 @@ brew install python@3.11 ffmpeg
 # 2. Dependencies
 ./setup.sh
 
-# 3. Build and launch; the first Kokoro use downloads its local voice model.
+# 3. Set up the local expressive Drama 3 voice (~22 GiB, one-time download).
+./scripts/setup_drama3.sh
+
+# 4. Build and launch
 ./scripts/make_app.sh
 open -n ./Rocky.app
 ```
 
-Kokoro's British `bf_emma` voice is the default. You can try another preset
-with `--kokoro-voice` or use an installed macOS voice with `--tts-engine macos`.
-The much larger `./scripts/fetch_assets.sh` downloads optional Ollama and legacy
-XTTS assets; they are not needed for the default Kokoro voice. The standalone
-`rocky_say.py` legacy voice tool remains separate from the desktop app.
+Drama 3 is Rocky's default voice: it runs locally through MLX and references a
+generic British female voice generated locally with Kokoro, with no inserted
+breathing effects and a slightly faster speaking pace. The one-time setup keeps its
+22 GiB model and separate Python environment in `~/.cache/rocky`; neither is
+added to this repository. The app loads Drama 3 on first speech and keeps it
+resident while running. This uses about 26 GiB of memory during synthesis, so
+large Ollama models may compete for unified memory.
+
+Kokoro remains available with `--tts-engine kokoro`; try another preset with
+`--kokoro-voice`. An installed macOS voice remains available with
+`--tts-engine macos`. The separate `rocky_say.py` legacy voice tool is not used
+by the desktop app.
 
 Run from the project instead of the bundle if you do not need the camera:
 
@@ -83,10 +93,29 @@ F1 hold / F2 toggle   push-to-talk; holding F1 interrupts Rocky
 F3 or Space           look through the camera
 F4                    hands-free listening on/off
 F5                    watch mode on/off (eyes follow your face)
+F6                    run local setup diagnostics
+F7                    test the mic briefly (audio is not saved)
+F8                    test the camera with one frame (not saved/uploaded)
+F9                    run safe local brain/voice recovery checks
 type + Enter          talk by keyboard
 1 – 7                 force an emotion (when the input line is empty)
 Esc                   quit
 ```
+
+Run a terminal diagnosis with `./venv/bin/python rocky_desktop_app.py --diagnose`.
+It checks dependencies, model/runtime files, Ollama model availability, and
+audio-device enumeration without opening the mic or camera. The report is saved
+to `logs/diagnostics.txt`. Add `--diagnose-live` to also make a local brain
+request and synthesize a short voice sample (not played; may load large models).
+Use `--diagnose-mic` or `--diagnose-camera` only when you want those devices
+opened for a brief test; captured media is not saved or sent anywhere.
+Say "Rocky, diagnose yourself" for a spoken summary, or "Rocky, fix this" /
+"fix the slow response" to run local brain and voice checks and warm them. A
+specific "fix the microphone" or "fix the camera" request also runs that
+device's brief, unsaved test.
+This recovery path never executes model-generated shell commands, installs
+packages, changes macOS permissions, or deletes files; it reports the
+remaining issue and saved diagnostic details instead.
 
 Flags: `--push-to-talk` starts with hands-free off; `--watch` starts in watch
 mode; `--no-camera` disables the camera entirely. Tune hands-free silence

@@ -27,7 +27,7 @@ selftest:
 	$(PY) rocky_desktop_app.py --selftest
 
 lint:
-	python3.11 -m compileall -q rocky_desktop_app.py rocky_eyes.py rocky_say.py app.py
+	python3.11 -m compileall -q rocky_desktop_app.py rocky_drama3_worker.py rocky_eyes.py rocky_say.py app.py
 
 assets:
 	@test -f assets/rocky_ref_15s.wav || \

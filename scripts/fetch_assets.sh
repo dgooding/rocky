@@ -102,8 +102,10 @@ if [[ "$ASSETS_ONLY" -ne 1 ]]; then
     "$PY" -c "from faster_whisper import WhisperModel; WhisperModel('base.en', device='cpu', compute_type='int8')"
     say "Voice model (XTTS v2, ~1.8 GB, cached once)"
     COQUI_TOS_AGREED=1 "$PY" -c "from TTS.api import TTS; TTS('tts_models/multilingual/multi-dataset/xtts_v2')" >/dev/null
+    say "Default local voice (Drama 3 MLX, ~22 GiB, isolated from ./venv)"
+    "$ROOT/scripts/setup_drama3.sh"
   else
-    warn "No ./venv yet; run ./setup.sh, then re-run this script to cache the speech and voice models."
+    warn "No ./venv yet; run ./setup.sh, then re-run this script to cache speech, voice, and Drama 3 models."
   fi
 fi
 
