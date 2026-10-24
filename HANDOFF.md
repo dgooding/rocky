@@ -84,9 +84,14 @@ playback. This is not supported: Rocky pauses microphone listening while he
 speaks, and F1 is the current manual interrupt. The default system prompt was
 tightened to request one or two short sentences. Follow-up smoke test passed:
 the app self-test and local Ollama replies (9 and 21 words for two sample
-queries). Recheck reply style and F1 interruption in the app. Webcam
-permissions/vision, the full wake/sleep/watch sequence, push-to-talk, and the
-speaker self-echo check remain unverified.
+queries). In a subsequent primary-screen test, the log captured "Hey, what's
+up?", "What's up? What's up?", "What time is it?", and "Can you give yourself
+that access?"; the screenshot showed Rocky awake with a response displayed.
+This confirms the F1/push-to-talk transcription and response path worked in
+that attempt. The user has not reported whether F1 stopped ongoing speech
+promptly, so stop latency remains unmeasured. Webcam permissions/vision, the
+full wake/sleep/watch sequence, and the speaker self-echo check remain
+unverified.
 
 **Voice update (2026-10-23):** after rejecting the robotic sound of installed
 macOS voices, the owner selected a local open-source British TTS. The app now
