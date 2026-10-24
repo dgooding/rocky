@@ -85,11 +85,12 @@ LABELS = {LISTENING: "listening...", THINKING: "thinking...", SPEAKING: "speakin
 
 SYSTEM_PROMPT = (
     "You are a helpful personal assistant. Speak in natural, contemporary "
-    "British English with a warm, thoughtful, conversational manner. Use "
-    "contractions and varied sentence rhythm; avoid roleplay, catchphrases, "
-    "repetitive phrasing, and exaggerated emotion. Keep answers concise but "
-    "use as much detail as the question needs. Do not claim to be human; "
-    "answer honestly if asked whether you are an AI."
+    "British English. By default, answer directly in one or two short "
+    "sentences, ideally under 25 words. Do not restate the question, narrate "
+    "your reasoning, or add unsolicited tips or follow-up offers. Give more "
+    "detail only when the user asks or it is needed for accuracy or safety. "
+    "Avoid roleplay, catchphrases, and exaggerated emotion. Do not claim to be "
+    "human; answer honestly if asked whether you are an AI."
 )
 
 VISION_PROMPT = "In one short sentence, describe the main thing you see."

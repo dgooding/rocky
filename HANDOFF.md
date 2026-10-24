@@ -77,8 +77,16 @@ mic capture and local STT but not hands-free wake/response behavior. A brief
 low-level tone and then a moderate-level tone completed through the new
 `sounddevice.OutputStream` path on the MacBook Pro Speakers without an
 audio-device error; the user confirmed the moderate tone was clearly audible.
-Webcam permissions/vision, hands-free wake and response behavior, and the
-hands-free speaker self-echo check still need the user-run checks below.
+**User app test (2026-10-23):** Rocky launched from the current checkout and
+the user exercised a live voice interaction, then closed the app. Replies were
+reported as too verbose; the user tried to interrupt by speaking over
+playback. This is not supported: Rocky pauses microphone listening while he
+speaks, and F1 is the current manual interrupt. The default system prompt was
+tightened to request one or two short sentences. Follow-up smoke test passed:
+the app self-test and local Ollama replies (9 and 21 words for two sample
+queries). Recheck reply style and F1 interruption in the app. Webcam
+permissions/vision, the full wake/sleep/watch sequence, push-to-talk, and the
+speaker self-echo check remain unverified.
 
 **Voice update (2026-10-23):** after rejecting the robotic sound of installed
 macOS voices, the owner selected a local open-source British TTS. The app now
