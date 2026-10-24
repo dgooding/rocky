@@ -85,13 +85,27 @@ LABELS = {LISTENING: "listening...", THINKING: "thinking...", SPEAKING: "speakin
 
 SYSTEM_PROMPT = (
     "You are a helpful personal assistant. Speak in natural, contemporary "
-    "British English. By default, answer directly in one or two short "
-    "sentences, ideally under 25 words. Do not restate the question, narrate "
-    "your reasoning, or add unsolicited tips or follow-up offers. Give more "
-    "detail only when the user asks or it is needed for accuracy or safety. "
-    "Avoid roleplay, catchphrases, and exaggerated emotion. Do not claim to be "
-    "human; answer honestly if asked whether you are an AI."
+    "British English. For a straightforward question, answer directly in one "
+    "short sentence, ideally under 15 words. When the user asks for a "
+    "description, detail, or continuation, give a clear, well-organized answer "
+    "with enough concrete facts and context to satisfy that request. Do not "
+    "restate the question, narrate your reasoning, or add unsolicited tips or "
+    "follow-up offers. Avoid roleplay, catchphrases, and exaggerated emotion. "
+    "Do not claim to be human; answer honestly if asked whether you are an AI."
 )
+
+DETAIL_REQUEST_PATTERN = re.compile(
+    r"\b(describe|descriptive|explain|detail|detailed|everything|in depth|"
+    r"long|thorough|elaborate|continue|keep going|tell me more|more about|"
+    r"step by step|compare|list|summari[sz]e)\b",
+    re.IGNORECASE,
+)
+
+
+def response_token_limit(text: str) -> int:
+    """Reserve longer generations for requests that explicitly need detail."""
+    return 220 if DETAIL_REQUEST_PATTERN.search(text) else 48
+
 
 VISION_PROMPT = "In one short sentence, describe the main thing you see."
 
@@ -590,6 +604,7 @@ class Brain:
 
     def _request(self, text: str):
         headers = {"Content-Type": "application/json"}
+        token_limit = response_token_limit(text)
         if self.api == "openai":
             if self.api_key:
                 headers["Authorization"] = f"Bearer {self.api_key}"
@@ -598,7 +613,7 @@ class Brain:
                 "messages": [{"role": "system", "content": SYSTEM_PROMPT},
                              {"role": "user", "content": text}],
                 "stream": True,
-                "max_tokens": 60,
+                "max_tokens": token_limit,
                 "temperature": 0.8,
             }).encode()
             return urllib.request.Request(f"{self.host}/chat/completions", data=body,
@@ -609,7 +624,7 @@ class Brain:
                          {"role": "user", "content": text}],
             "stream": True,
             "keep_alive": "30m",
-            "options": {"num_predict": 45, "temperature": 0.8, "top_p": 0.9,
+            "options": {"num_predict": token_limit, "temperature": 0.8, "top_p": 0.9,
                         "num_ctx": self.context},
         }).encode()
         return urllib.request.Request(f"{self.host}/api/chat", data=body, headers=headers)
@@ -1349,6 +1364,15 @@ def senses_selftest() -> bool:
         and not TRACK_ON_PATTERN.search("stop tracking"))
     print(f"[selftest] hearing commands (wake/sleep/track): {'ok' if commands_ok else 'FAIL'}")
     ok = ok and commands_ok
+
+    response_limits_ok = (
+        response_token_limit("What time is it?") == 48
+        and response_token_limit("Describe how geothermal turbines work.") == 220
+        and response_token_limit("Continue with more detail.") == 220
+    )
+    print(f"[selftest] response length by request: "
+          f"{'ok' if response_limits_ok else 'FAIL'}")
+    ok = ok and response_limits_ok
 
     cancel = threading.Event()
 

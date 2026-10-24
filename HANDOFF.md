@@ -82,16 +82,36 @@ the user exercised a live voice interaction, then closed the app. Replies were
 reported as too verbose; the user tried to interrupt by speaking over
 playback. This is not supported: Rocky pauses microphone listening while he
 speaks, and F1 is the current manual interrupt. The default system prompt was
-tightened to request one or two short sentences. Follow-up smoke test passed:
+initially tightened to request one or two short sentences. Follow-up smoke test passed:
 the app self-test and local Ollama replies (9 and 21 words for two sample
 queries). In a subsequent primary-screen test, the log captured "Hey, what's
 up?", "What's up? What's up?", "What time is it?", and "Can you give yourself
 that access?"; the screenshot showed Rocky awake with a response displayed.
 This confirms the F1/push-to-talk transcription and response path worked in
 that attempt. The user has not reported whether F1 stopped ongoing speech
-promptly, so stop latency remains unmeasured. Webcam permissions/vision, the
-full wake/sleep/watch sequence, and the speaker self-echo check remain
+promptly, so stop latency remains unmeasured. After the concise prompt update,
+the user said Rocky still shortened answers and sounded flat/monotone; test
+logs show requests for detailed India and Iceland/geothermal explanations.
+The earlier 45-token output cap was limiting detail, so generation now uses a
+48-token cap for ordinary questions and 220 for explicit detail/continuation
+requests. Local smoke tests returned 15 words for "What time is it?" and 95
+words for "Tell me everything you know about India." Kokoro synthesized
+long-form samples; voice expressiveness remains a separate, unresolved issue.
+One Kokoro request logged `'NoneType' object has no attribute 'peek'`; the
+same sample texts synthesized successfully in a later direct check, so
+intermittent synthesis reliability needs monitoring. Webcam permissions/vision,
+the full wake/sleep/watch sequence, and the speaker self-echo check remain
 unverified.
+
+**Fish Audio Drama 3 research (2026-10-23):** the model is explicitly designed
+for directed, expressive, long-form speech and supports natural-language
+performance directions. However, the official installation requirements say
+Drama 3 needs at least 48 GB NVIDIA GPU memory and supports neither CPU nor
+Apple MPS; the H200 streaming figures are not representative of this M1 Max.
+The official Fish Audio web/API path is hosted, so do not send Rocky's replies
+to it unless the owner explicitly opts into that cloud service. Keep Kokoro
+local as the active default; the Fish Audio website can be auditioned manually
+with non-sensitive sample text if the owner wants to compare quality.
 
 **Voice update (2026-10-23):** after rejecting the robotic sound of installed
 macOS voices, the owner selected a local open-source British TTS. The app now

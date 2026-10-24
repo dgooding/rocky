@@ -262,13 +262,17 @@ Ollama requests set:
   "stream": true,
   "keep_alive": "30m",
   "options": {
-    "num_predict": 45,
+    "num_predict": 48,
     "temperature": 0.8,
     "top_p": 0.9,
     "num_ctx": 8192
   }
 }
 ```
+
+Requests that explicitly ask for detail, a description, or continuation use a
+220-token cap instead, so simple replies stay short without truncating
+requested explanations.
 
 `num_ctx=8192` matters for `qwen3-coder`: its default 262k context reserves
 ~45 GB of unified memory. At 8k it is ~19 GB, with no quality loss for one-line

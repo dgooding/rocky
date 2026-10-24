@@ -76,11 +76,12 @@ rejects audio shorter than 100 ms or quieter than 0.008 peak.
 
 `Brain.stream()` sends a system prompt plus the user text to Ollama
 `/api/chat`, OpenAI `/chat/completions`, or Anthropic `/messages`, and yields
-text deltas. Ollama requests use `num_predict=45`, `temperature=0.8`,
-`top_p=0.9`, `num_ctx=8192`, and `keep_alive=30m`.
+text deltas. Ollama requests use a 48-token limit by default and 220 tokens
+when the user explicitly asks for detail or continuation. Other settings are
+`temperature=0.8`, `top_p=0.9`, `num_ctx=8192`, and `keep_alive=30m`.
 
-The system prompt constrains Rocky to one short sentence, plain English, no
-markdown, and no mention of being an AI.
+The system prompt requests a short answer for straightforward questions and
+enough concrete detail when the user asks for a description or explanation.
 
 ### 3. Sentence and clause splitting
 

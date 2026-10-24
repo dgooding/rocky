@@ -32,7 +32,7 @@ blocks to the output device, but its device latency has not yet been measured.
 | XTTS 36-char sentence | 2.44 s | 1.48 s of audio |
 | XTTS 47-char sentence | 3.46 s | 2.13 s of audio |
 | `qwen3-coder` first token | 0.07–0.15 s | Warm, local Ollama |
-| `qwen3-coder` full reply | ~0.22 s | 45-token cap |
+| `qwen3-coder` full reply | ~0.22 s | Historical 45-token cap; now 48 simple / 220 detailed |
 | faster-whisper `base.en` | ~0.4 s | After key release |
 | `qwen2.5vl:3b` vision | ~0.4 s warm / ~6 s after swap | Ollama |
 | End-to-end first sound | ~3–5 s | Dominated by XTTS |
