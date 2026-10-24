@@ -1,10 +1,10 @@
 # Rocky
 
-A desk companion built around a local voice clone, a local brain, a local
-vision model, and a pair of animated eyes. It is the on-screen version of
-Casey Grothaus's [desk robot](https://github.com/cgro00/desk-robot) (see it in
-action: [YouTube short](https://www.youtube.com/shorts/aHSusA0xXjU)): say
-"hey Rocky", and he looks at you and answers in character.
+A local-first desktop assistant with a British English Kokoro voice, a local
+brain, a local vision model, and animated eyes inspired by Casey Grothaus's
+[desk robot](https://github.com/cgro00/desk-robot) (see it in action:
+[YouTube short](https://www.youtube.com/shorts/aHSusA0xXjU)). Say "hey Rocky"
+and the assistant looks at you and responds conversationally.
 
 Talk to him, type to him, show him things. Nothing leaves the machine unless
 you explicitly configure a hosted brain or a cloud voice.
@@ -15,7 +15,7 @@ you explicitly configure a hosted brain or a cloud voice.
 
 | Piece | State |
 |---|---|
-| Voice clone (XTTS v2, Rocky) | Working, but **too slow for real-time** (~2.4–3.8 s per clause on an M1 Max) |
+| Speech voice | Kokoro `bf_emma` (British English) by default; local macOS voice available as an alternative |
 | Hearing: hands-free, "hey Rocky" wake, sleep command | Working (energy-based speech detection; untested on hardware yet) |
 | Mic → speech-to-text (faster-whisper) | Working, ~0.4 s after you stop talking |
 | Brain (Ollama `qwen3-coder:latest`, streaming) | Working, ~0.1 s warm first token |
@@ -25,7 +25,8 @@ you explicitly configure a hosted brain or a cloud voice.
 | Sight: watch mode, eyes follow your face | Working (opt-in; OpenCV face detection, local) |
 | macOS camera + mic permission | Working **only via a real `.app` bundle** |
 | GUI text input | Working |
-| Barge-in / echo cancellation / streaming playback | **Not implemented yet** (he stops listening while he speaks) |
+| Voice interruption | F1 cancels a response and starts push-to-talk; automatic voice barge-in and echo cancellation are not implemented |
+| PCM playback | Speech audio is played as 20 ms PCM blocks |
 
 The current app is turn-based. The real-time redesign is documented in
 [`docs/REALTIME_PLAN.md`](docs/REALTIME_PLAN.md); the measured bottlenecks are in
@@ -40,20 +41,16 @@ brew install python@3.11 ffmpeg
 # 2. Dependencies
 ./setup.sh
 
-# 3. Large files that are not in git: Rocky's voice files (from the upstream
-#    author's links), Ollama models, speech and voice models. ~23 GB, once.
-./scripts/fetch_assets.sh
-
-# 4. Voice server (first load ~20 s)
-COQUI_TOS_AGREED=1 ./venv/bin/python rocky_say.py --server start
-
-# 5. Build and launch the app bundle
+# 3. Build and launch; the first Kokoro use downloads its local voice model.
 ./scripts/make_app.sh
 open -n ./Rocky.app
 ```
 
-Have your own backup of the voice files? `./scripts/restore_assets.sh
-/path/to/your/rocky-assets` copies them instead of downloading.
+Kokoro's British `bf_emma` voice is the default. You can try another preset
+with `--kokoro-voice` or use an installed macOS voice with `--tts-engine macos`.
+The much larger `./scripts/fetch_assets.sh` downloads optional Ollama and legacy
+XTTS assets; they are not needed for the default Kokoro voice. The standalone
+`rocky_say.py` legacy voice tool remains separate from the desktop app.
 
 Run from the project instead of the bundle if you do not need the camera:
 
@@ -75,13 +72,14 @@ He listens hands-free, like the desk robot:
 | "Rocky, sleep" / "goodnight" | He says goodnight and stops answering until you say "hey Rocky". |
 
 He stops listening while he is thinking or speaking, so he never hears himself.
-Watch mode keeps the camera open (its light stays on) and is off unless you
-ask for it.
+Hold F1 to interrupt a response and speak with push-to-talk; automatic voice
+barge-in is not enabled without echo cancellation. Watch mode keeps the camera
+open (its light stays on) and is off unless you ask for it.
 
 ## Controls
 
 ```
-F1 hold / F2 toggle   push-to-talk (works alongside hands-free)
+F1 hold / F2 toggle   push-to-talk; holding F1 interrupts Rocky
 F3 or Space           look through the camera
 F4                    hands-free listening on/off
 F5                    watch mode on/off (eyes follow your face)
@@ -91,7 +89,8 @@ Esc                   quit
 ```
 
 Flags: `--push-to-talk` starts with hands-free off; `--watch` starts in watch
-mode; `--no-camera` disables the camera entirely.
+mode; `--no-camera` disables the camera entirely. Tune hands-free silence
+endpointing with `--end-silence-ms 500` (200–2000 ms; default 700).
 
 ## How it works
 
@@ -102,7 +101,7 @@ mic ──► speech detection ──► "hey Rocky"? ──► faster-whisper �
                                                               sentence / clause split
                                                                         │
                                                                         ▼
-                                                    XTTS v2 voice clone ──► pygame playback
+                                                    Kokoro British voice / macOS alternative ──► PCM playback
                                                                         │
                                                                         ▼
                                                                eyes react to amplitude
@@ -111,8 +110,9 @@ camera ──► one JPEG on request ──► qwen2.5vl:3b (Ollama) ──► o
 camera ──► watch mode: face detection (OpenCV, 4 fps) ──► eyes follow you
 ```
 
-The app is deliberately local-first: no API keys are required. Hosted
-OpenAI-compatible or Anthropic brains are supported via CLI flags.
+The app is deliberately local-first: no API keys are required. The default
+Kokoro voice is generated on-device. Hosted OpenAI-compatible or Anthropic
+brains are supported via CLI flags.
 
 ## Documentation
 

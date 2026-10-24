@@ -1,10 +1,13 @@
 # Roadmap
 
-The goal is a desk companion that feels present: sub-second speech, natural
-interruption, continuous awareness, and graceful failure. It is the on-screen
-version of the [desk robot](https://github.com/cgro00/desk-robot) Rocky is
-modelled on. Work is ordered by risk and by what unlocks the most perceived
-improvement.
+The goal is a local assistant that feels present: responsive natural speech,
+interruption, opt-in awareness, and graceful failure. It has animated eyes
+inspired by Casey Grothaus's [desk robot](https://github.com/cgro00/desk-robot).
+
+**Voice decision (2026-10-23):** Kokoro `bf_emma` is the local default, with a
+neutral conversational assistant personality. Older voice-clone and hosted
+provider experiments below are historical research, not approved work; do not
+route speech or other data to a cloud service without explicit user opt-in.
 
 Status: in progress. Items are not implemented unless checked.
 
@@ -19,39 +22,39 @@ Status: in progress. Items are not implemented unless checked.
   TTS-first-byte, first-audio-played, barge-in-stop.
 - [ ] Write a JSONL trace per turn; compute p50/p95 over 20 turns.
 - [ ] Keep `qwen3-coder` and `qwen2.5vl` resident; verify `keep_alive`.
-- [ ] Record the current XTTS baseline on this machine.
-- [ ] Confirm voice-clone consent and a monthly cloud budget cap.
-- [ ] Run a one-day A/B: OpenAI Realtime vs Cartesia/ElevenLabs cascade.
+- [ ] Benchmark warm Kokoro synthesis and first-audio latency.
+- [ ] Compare local British Kokoro presets with the user.
 
-**Exit:** measured baseline; primary engine and fallback chosen.
+**Exit:** local pipeline baseline measured; Kokoro default and macOS fallback
+characterized.
 
 ## Phase 1 — Realtime audio core (2–3 days)
 
 - [x] Continuous 16 kHz mic capture with 20 ms frames.
 - [ ] Silero VAD + Smart Turn v3 / semantic endpointing (today: adaptive
-  energy endpointing, 700 ms pause).
-- [ ] Replace `pygame.mixer` with `sounddevice`/PyAudio PCM playback.
-- [ ] Add a cancelable audio ring buffer.
-- [ ] Implement barge-in: stop, flush, cancel, listen.
+  energy endpointing, configurable 200–2000 ms pause; 700 ms default).
+- [x] Stream playback as 20 ms PCM blocks from each synthesized WAV.
+- [ ] Keep one output stream open and add a cancelable audio ring buffer.
+- [x] F1 manually stops playback, cancels the text stream, and starts
+  push-to-talk.
+- [ ] Add automatic voice barge-in: detect speech while playing, flush, cancel,
+  and listen (requires AEC first).
 - [ ] Add macOS AEC via `AVAudioEngine` voice processing (or headphones
   fallback).
-- [ ] Pre-generate 5–10 backchannels in Rocky's voice.
-- [ ] Add a `LISTENING → THINKING → SPEAKING → INTERRUPTED` state machine.
+- [ ] Pre-generate 5–10 neutral assistant backchannels locally.
+- [ ] Add a complete `LISTENING → THINKING → SPEAKING → INTERRUPTED` state
+  machine; current cancellation is an event over the existing states.
 
 **Exit:** p95 speech-end → first audio <800 ms; barge-in stop <150 ms; no
 self-hearing.
 
-## Phase 2 — Voice engine (2–3 days)
+## Phase 2 — Local voice responsiveness (2–3 days)
 
-- [ ] Define a `RealtimeSession` interface (audio in/out, cancel, events).
-- [ ] Implement the primary engine.
-- [ ] Implement the fallback engine.
+- [ ] Optimize and benchmark Kokoro synthesis for the default British preset.
+- [ ] Keep the macOS system voice available as a local fallback.
 - [ ] Tune first-clause length and TTS continuations.
-- [ ] Measure clone similarity (blind test, 10–20 phrases).
-- [ ] Measure cost per 100 turns.
-- [ ] Add a voice-consent note to the UI/docs.
 
-**Exit:** primary voice accepted; fallback works; cost is understood.
+**Exit:** local voice is accepted; fallback works; warm latency is measured.
 
 ## Phase 3 — Vision (2–3 days)
 
@@ -84,7 +87,8 @@ fallback works.
 ## Later / exploratory
 
 - [ ] Full-duplex speech-to-speech with local Moshi/Qwen-Omni for offline.
-- [ ] RVC or Piper fine-tune for a fully local cloned voice.
+- [ ] RVC or Piper fine-tune for a fully local cloned voice (out of current
+  scope; revisit only after an explicit owner decision).
 - [ ] Multi-person awareness (who is speaking / who is present).
 - [ ] Gesture control (wave to wake, palm to stop).
 - [ ] Menu-bar controls and global hotkeys.

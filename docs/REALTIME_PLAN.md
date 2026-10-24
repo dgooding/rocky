@@ -2,14 +2,19 @@
 
 Status: **proposal, not implemented**
 
+**Current voice decision (2026-10-23):** the desktop app uses local Kokoro
+`bf_emma` with a neutral assistant personality. This document preserves earlier
+hosted and cloned-voice research; none of those options are approved for
+implementation without explicit user opt-in.
+
 Goal: make Rocky feel like a real-time presence — speech starts in well under a
 second, he can be interrupted, the camera is aware of the scene, and the whole
 thing survives real-world noise and network problems.
 
-The current app is turn-based and blocking. The measured bottleneck is XTTS
-(2.4–3.8 s per clause), not the brain (0.07–0.15 s first token). Replacing the
-model alone will not fix the feel; the audio path and orchestration have to
-change.
+The current app is turn-based and blocking. Historical XTTS measurements
+(2.4–3.8 s per clause) apply only to the legacy standalone tool, not the
+desktop app's current Kokoro voice path. Replacing the model alone will not
+fix the feel; the audio path and orchestration have to change.
 
 ## Foundation decision
 
@@ -77,7 +82,8 @@ TEN is overkill for a single desktop app.
 - Cons: cloud dependency, per-minute cost, voice-clone quality is not guaranteed
   to match XTTS, and the voice IP/consent constraints still apply.
 
-This is the recommended **v1 baseline** if cloud is acceptable.
+This was the recommended **v1 baseline** when this proposal was written; it is
+not the current implementation plan.
 
 ### 2.3 Engine B — Pipecat cascade
 
@@ -204,7 +210,8 @@ be fine-tuned, which is a different workflow.
 
 ### 5.3 Latency masking
 
-- Pre-generate 5–10 backchannels ("Mm", "Yes", "Okay", "Hm?") in Rocky's voice.
+- Pre-generate 5–10 neutral local assistant backchannels ("Mm", "Yes", "Okay",
+  "Hm?").
   Play one immediately when the user stops speaking, then replace it with the
   real answer when ready.
 - Start TTS on the first 3–6 words, not the first full sentence.
@@ -252,16 +259,16 @@ be fine-tuned, which is a different workflow.
 
 ## 8. Phases
 
-### Phase 0 — Instrument and bake-off (0.5–1 day)
+### Phase 0 — Instrument the local path (0.5–1 day)
 
 - Add timestamps: speech-end, STT-final, LLM-first-token, TTS-first-byte,
   first-audio-played, barge-in-stop.
 - Log p50/p95 over 20 turns; store a small JSONL trace.
 - Keep brain and vision models warm; avoid Ollama swaps.
-- Confirm voice-clone consent and cloud budget.
-- Run a 1-day A/B: OpenAI Realtime vs Cartesia/ElevenLabs cascade.
+- Benchmark warm Kokoro synthesis and first-audio latency.
+- Compare local British Kokoro presets with the user.
 
-**Exit:** a measured baseline and a chosen primary engine.
+**Exit:** a measured baseline for the selected local voice path.
 
 ### Phase 1 — Realtime audio core (2–3 days)
 
@@ -270,19 +277,18 @@ be fine-tuned, which is a different workflow.
 - Cancelable TTS/LLM tasks.
 - Barge-in state machine.
 - macOS AEC helper (or headphones fallback).
-- Pre-generated backchannels.
+- Pre-generated local assistant backchannels.
 
 **Exit:** p95 speech-end → first audio <800 ms; barge-in stop <150 ms; no
 self-hearing.
 
-### Phase 2 — Voice engine (2–3 days)
+### Phase 2 — Local voice responsiveness (2–3 days)
 
-- Implement the winning engine behind a `RealtimeSession` interface.
-- Add the other engine as fallback.
+- Optimize and benchmark Kokoro for the default British preset.
+- Keep the macOS system voice available as a local fallback.
 - Tune first-clause length and TTS continuations.
-- Measure clone similarity and cost per 100 turns.
 
-**Exit:** primary voice accepted; fallback works.
+**Exit:** local voice is accepted; fallback works; warm latency is measured.
 
 ### Phase 3 — Vision (2–3 days)
 

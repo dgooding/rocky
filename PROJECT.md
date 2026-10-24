@@ -1,6 +1,6 @@
 # Rocky — full project handbook
 
-> A desk companion with a local voice clone, a local brain, a local vision
+> A desk companion with local speech, a local brain, a local vision
 > model, and animated eyes. Talk to him, type to him, show him things.
 
 This is the single document that explains the whole project: what works, how it
@@ -10,18 +10,20 @@ constraints are. The short version is in [`README.md`](README.md).
 > Picking up development? Start with [`HANDOFF.md`](HANDOFF.md) for the current
 > state, constraints, phases, and next action.
 
-Last updated: 2026-10-22
+Last updated: 2026-10-23
 
 ---
 
 ## 1. What it is
 
-Rocky is a macOS desktop companion inspired by Rocky, the Eridian engineer from
-*Project Hail Mary*. The app combines:
+Rocky is a macOS desktop companion with eyes inspired by the desk robot. The
+assistant speaks with a natural conversational style rather than roleplaying
+the fictional character. The app combines:
 
 - **Speech input** — microphone capture and faster-whisper transcription.
 - **A local brain** — an Ollama chat model, streamed token by token.
-- **A cloned voice** — Coqui XTTS v2 conditioned on a short Rocky reference clip.
+- **Speech output** — Kokoro British English voice by default, with a macOS
+  system voice alternative.
 - **A face** — a pygame window with procedural eyes, blinking, gaze, and seven
   emotion presets driven by the reply text and audio amplitude.
 - **Local vision** — a webcam snapshot sent to a small VLM when you press F3.
@@ -32,7 +34,8 @@ Anthropic brains are supported, but no keys are required for the local path.
 The project started as a fork of
 [`Kuberwastaken/rocky-tts`](https://github.com/Kuberwastaken/rocky-tts), which
 provides the voice-transform script and the XTTS/RVC voice pipeline. The desktop
-app, eyes, camera path, streaming brain integration, and documentation in this
+app uses Kokoro instead; `rocky_say.py` remains a separate legacy tool. The
+eyes, camera path, streaming brain integration, and documentation in this
 repository are the local build.
 
 ---
@@ -41,7 +44,7 @@ repository are the local build.
 
 | Piece | State | Notes |
 |---|---|---|
-| Voice clone (XTTS v2) | Working, slow | ~2.4–3.8 s per clause measured on an M1 Max; not real-time |
+| Speech voice | Kokoro `bf_emma` British voice by default; macOS `say` is an alternative |
 | Mic capture | Working | 16 kHz mono; hands-free (20 ms frames, energy-based speech detection) plus push-to-talk |
 | Speech-to-text | Working | faster-whisper `base.en`, ~0.4 s after you stop talking |
 | Wake word | Working | "hey Rocky" in the transcript; awake 60 s after each exchange; "Rocky, sleep" |
@@ -52,9 +55,9 @@ repository are the local build.
 | Watch mode | Working, opt-in | OpenCV face detection at 4 fps; eyes follow your face |
 | macOS permissions | Working | Camera/mic only work through a real `.app` bundle |
 | Text input | Working | Type + Enter in the app window |
-| Barge-in | **Missing** | He stops listening while he thinks or speaks |
+| Voice interruption | F1 cancels playback and starts push-to-talk; automatic voice barge-in is missing |
 | Echo cancellation | **Missing** | Why he stops listening while he speaks |
-| Streaming playback | **Missing** | `pygame.mixer` plays a complete WAV file |
+| PCM playback | Working | Complete synthesized WAV is played as 20 ms PCM blocks; TTS itself is not streamed |
 
 The detailed redesign is in [`docs/REALTIME_PLAN.md`](docs/REALTIME_PLAN.md).
 Measured numbers are in [`docs/LATENCY.md`](docs/LATENCY.md).
@@ -69,7 +72,7 @@ Measured numbers are in [`docs/LATENCY.md`](docs/LATENCY.md).
 - Python **3.11** (TTS caps at `<3.12`).
 - `ffmpeg`.
 - [Ollama](https://ollama.com/) running locally.
-- A private copy of the Rocky voice assets (not included; see §10).
+- Network access on first Kokoro run to cache the local voice model.
 
 ```sh
 brew install python@3.11 ffmpeg
@@ -129,7 +132,11 @@ ollama pull llama3.2:3b
 ./venv/bin/python rocky_desktop_app.py --brain-model llama3.2:3b
 ```
 
-### 3.5 Start the voice server
+### 3.5 Optional legacy voice tool
+
+The desktop app uses Kokoro by default and does not use the cloned Rocky voice.
+`rocky_say.py` remains as a separate legacy script. Its private assets and
+server are not required to run the desktop app.
 
 ```sh
 COQUI_TOS_AGREED=1 ./venv/bin/python rocky_say.py --server start
@@ -174,10 +181,11 @@ modelled on: say **"hey Rocky"** to wake him (his name alone does not), then
 just talk; he stays awake for a minute after each exchange. "What do you
 see?", "what am I holding?" and "look left" take a camera look; "track me" /
 "stop tracking" turn watch mode on and off; "Rocky, sleep" or "goodnight" puts
-him back to sleep.
+him back to sleep. Hold F1 during a reply to stop Rocky and speak over
+push-to-talk; automatic voice barge-in is not enabled without echo cancellation.
 
 ```
-F1 hold / F2 toggle   push-to-talk (works alongside hands-free)
+F1 hold / F2 toggle   push-to-talk; holding F1 interrupts Rocky
 F3 or Space           look through the camera
 F4                    hands-free listening on/off   (--push-to-talk starts it off)
 F5                    watch mode on/off              (--watch starts it on)
@@ -207,10 +215,10 @@ text also selects a mood automatically via `rocky_eyes.mood_for()`.
 │  text  ─► Brain.stream() ─► sentence_stream() ─► clause_split()     │
 │                                      │                              │
 │                                      ▼                              │
-│                         synthesize() ─► XTTS HTTP server (59720)    │
+│                         synthesize() ─► Kokoro / optional macOS say  │
 │                                      │                              │
 │                                      ▼                              │
-│                         speak() ─► pygame.mixer.Sound.play()        │
+│                         speak() ─► sounddevice PCM output           │
 │                                                                     │
 │  look  ─► Camera.snapshot() ─► Brain.vision() ─► speak()            │
 └─────────────────────────────────────────────────────────────────────┘
@@ -221,7 +229,7 @@ text also selects a mood automatically via `rocky_eyes.mood_for()`.
 | Process | Role |
 |---|---|
 | `rocky_desktop_app.py` | UI, mic, STT, brain client, camera, TTS client, playback |
-| `rocky_say.py --server start` | Persistent XTTS server on `127.0.0.1:59720` |
+| `rocky_say.py --server start` | Legacy standalone XTTS server on `127.0.0.1:59720` |
 | Ollama | `qwen3-coder` (brain) and `qwen2.5vl:3b` (vision) |
 | `Rocky.app` | Launcher bundle that preserves macOS camera/mic identity |
 
@@ -272,14 +280,14 @@ replies. Override with `--brain-context`.
 2. `sentence_stream()` yields completed sentences.
 3. `clause_split()` splits at commas; the first chunk is capped at 38
    characters so the first sound arrives sooner.
-4. `synthesize()` applies the Rocky grammar transform (`rocky_transform`) and
-   calls the XTTS server.
-5. `speak()` plays each WAV as it arrives and publishes an RMS envelope for the
-   eyes.
+4. `synthesize()` uses Kokoro's British `bf_emma` voice locally by default.
+   `--kokoro-voice` selects another preset; `--tts-engine macos` uses the
+   installed system voice instead.
+5. `speak()` plays each generated AIFF/WAV as it arrives and publishes an RMS
+   envelope for the eyes.
 
-The server computes XTTS conditioning latents once at startup and reuses them
-for every request. `ROCKY_SPEED` (default `1.25`) shortens both audio length and
-generation time.
+Kokoro's model is cached locally after first use. The standalone
+`rocky_say.py` tool still uses XTTS and its own reference voice assets.
 
 ### 5.5 Vision pipeline
 
@@ -311,7 +319,7 @@ Run the eye-only self-test:
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--no-brain` | off | Echo mode: repeat the user in Rocky grammar |
+| `--no-brain` | off | Echo mode: repeat what the user said |
 | `--brain-model` | `qwen3-coder:latest` | Ollama model or hosted model name |
 | `--brain-context` | `8192` | Ollama `num_ctx`; lower = less memory |
 | `--brain-api` | `ollama` | `ollama`, `openai`, or `anthropic` |
@@ -322,14 +330,18 @@ Run the eye-only self-test:
 | `--no-camera` | off | Disable F3 |
 | `--snap PATH` | — | Grab one frame, save, exit (permission test) |
 | `--stt-model` | `base.en` | `tiny.en`, `base.en`, `small.en` |
+| `--tts-engine` | `kokoro` | `kokoro` British voice or `macos` system voice |
+| `--kokoro-voice` | `bf_emma` | Kokoro voice preset |
+| `--system-voice` | `Samantha` | Installed macOS voice name when selected |
+| `--end-silence-ms` | `700` | Hands-free silence endpoint, 200–2000 ms |
 | `--selftest` | off | Headless STT/brain/vision/UI check |
 
 ### 6.2 Environment variables
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `COQUI_TOS_AGREED` | unset | Required by Coqui TTS to download/run XTTS |
-| `ROCKY_SPEED` | `1.25` | XTTS speed factor; higher = faster/shorter |
+| `COQUI_TOS_AGREED` | unset | Required only by the legacy standalone Coqui XTTS tool |
+| `ROCKY_SPEED` | `1.25` | Legacy XTTS speed factor; higher = faster/shorter |
 | `BRAIN_API_KEY` | unset | Hosted brain key |
 
 ### 6.3 Hosted brain examples
@@ -384,8 +396,15 @@ bundle and the prompt returns, allow it again; the bundle ID stays
 Measured on the development machine (M1 Max, 64 GB, macOS 27.0.1, Python
 3.11.17). These are wall-clock measurements, not vendor claims.
 
+The XTTS numbers below are a historical baseline for the legacy standalone
+tool, not the desktop app's current Kokoro path. In a single local smoke check
+(2026-10-23), Kokoro took 3.41 s for the first phrase in a process and 0.30 s
+for the next phrase. This is not a statistically meaningful benchmark.
+
 | Stage | Measurement |
 |---|---|
+| Kokoro first phrase in process | 3.41 s |
+| Kokoro next phrase, same process | 0.30 s |
 | XTTS server load | ~22 s cold |
 | XTTS synthesis, `"Hi."` | ~3.8 s |
 | XTTS synthesis, `"Hello friend."` | ~2.8 s |
@@ -397,9 +416,9 @@ Measured on the development machine (M1 Max, 64 GB, macOS 27.0.1, Python
 | `qwen2.5vl:3b` vision (warm) | ~0.4 s; ~6 s after a model swap |
 | End-to-end first sound | ~3–5 s |
 
-The dominant cost is XTTS, not the brain. The original handoff estimated 2–3 s
-to first sound; the per-clause measurements above are more pessimistic and
-closer to the observed experience under load.
+The legacy XTTS tool was dominated by synthesis, not the brain. The original
+handoff estimated 2–3 s to first sound; the per-clause measurements above are
+more pessimistic and closer to the observed experience under load.
 
 ### 8.1 The `inference_stream` problem
 
@@ -423,7 +442,7 @@ recommends replacing XTTS rather than tuning it.
 1. **`exec` in the `.app` launcher breaks camera permission.** Keep the
    launcher alive as the parent process.
 2. **numpy must stay `<2`.** `gruut` (a TTS dependency) requires it. Installing
-   current OpenCV can silently upgrade numpy and break XTTS on the next restart.
+   current OpenCV can silently upgrade numpy and break the legacy XTTS tool.
    Keep `numpy==1.26.4` and `opencv-python-headless==4.11.0.86`.
 3. **The voice server is single-threaded.** Two callers queue behind each
    other; a 1.2 s synthesis can look like 12 s. This is not a bug.
@@ -435,8 +454,8 @@ recommends replacing XTTS rather than tuning it.
 6. **Ollama model swaps are expensive.** Loading `qwen2.5vl` after
    `qwen3-coder` can take ~6 s. Keep both resident with `keep_alive`, or use a
    single multimodal session in the real-time redesign.
-7. **`pygame.mixer` is not a streaming API.** It loads a complete WAV and has
-   no sample-accurate cancellation. Barge-in requires `sounddevice`/PyAudio.
+7. **TTS still returns a full WAV.** Playback writes short PCM blocks to
+   `sounddevice.OutputStream`, but cannot start until synthesis finishes.
 8. **The mic is closed while Rocky speaks.** There is no self-hearing loop today
    only because the app is half-duplex. Adding barge-in without AEC will create
    one.
@@ -477,20 +496,20 @@ See [`LICENSE`](LICENSE), [`NOTICE.md`](NOTICE.md), and
 The full research-backed plan is in
 [`docs/REALTIME_PLAN.md`](docs/REALTIME_PLAN.md). The short version:
 
-- The current pipeline is turn-based, blocking, and full-WAV. Replacing the
-  model alone will not fix the feel.
+- The current pipeline is turn-based, blocking, and synthesizes a full clause
+  before playback. Kokoro is the selected local default; the user's explicit
+  local-only choice supersedes the hosted/clone alternatives in the research
+  below.
 - Build one realtime core with two interchangeable engines:
   1. **OpenAI Realtime** — custom voice, semantic VAD, native interruption,
      image input; fastest path, cloud dependency.
-  2. **Pipecat cascade** — Deepgram Nova-3 or Cartesia Ink 2 → local LLM →
-     Cartesia Sonic 3.6 or ElevenLabs Flash v2.5 cloned voice; keeps Rocky's
-     voice, more control, 500–800 ms target.
+  2. **Pipecat cascade** — a researched hosted alternative only; requires
+     separate explicit opt-in and is not part of the current local-only plan.
 - Add macOS AEC via `AVAudioEngine.setVoiceProcessingEnabled(true)`, streaming
   PCM playback, and cancelable TTS.
 - Replace the snapshot-only camera with a cheap always-on detector plus an
   on-demand VLM; never run a VLM at 30 FPS.
-- Target: p95 speech-end → first audio < 800 ms (cascade) or < 700 ms
-  (speech-to-speech), barge-in stop < 150 ms.
+- Target: p95 speech-end → first audio < 800 ms, barge-in stop < 150 ms.
 
 Verified facts used in the plan:
 
@@ -516,10 +535,10 @@ Verified facts used in the plan:
 The phased plan, acceptance criteria, and decision points are in
 [`docs/ROADMAP.md`](docs/ROADMAP.md). In order:
 
-1. **Phase 0** — instrument latency; keep models warm; run a TTS bake-off.
+1. **Phase 0** — instrument latency; keep models warm; benchmark local Kokoro.
 2. **Phase 1** — streaming audio core, VAD, AEC, barge-in, cancelable playback.
-3. **Phase 2** — pick the realtime voice engine; stream cloned TTS or use
-   OpenAI Realtime.
+3. **Phase 2** — improve local Kokoro responsiveness and retain a local
+   fallback.
 4. **Phase 3** — continuous camera perception with a cheap detector plus an
    on-demand VLM.
 5. **Phase 4** — wake word, memory, offline fallback, cost caps, soak tests,
@@ -554,7 +573,8 @@ does not need a camera.
 
 ## 14. Privacy and security
 
-- Local by default: Ollama at `127.0.0.1:11434`, XTTS at `127.0.0.1:59720`.
+- Local by default: Ollama at `127.0.0.1:11434`, Kokoro in-process. The legacy
+  XTTS tool uses `127.0.0.1:59720`.
 - No telemetry, no analytics, no cloud calls unless you configure a hosted
   brain or cloud voice.
 - The camera is opened only for an explicit look in the current build. A
@@ -589,20 +609,22 @@ does not need a camera.
 ## 16. FAQ
 
 **Does it work without internet?**
-Yes, if the models and assets are already local. Ollama and XTTS are local. The
-default brain and vision paths do not call the internet.
+Yes, if the models and assets are already local. Ollama and Kokoro are local.
+The default brain, vision, and voice paths do not call a cloud service.
 
 **Why is speech so slow?**
-XTTS is the bottleneck. On this machine each clause takes 2.4–3.8 s to
-synthesize. The brain is ~0.1–0.2 s. See §8.
+The active Kokoro path has not been benchmarked for warm synthesis yet. The
+historical XTTS figures (2.4–3.8 s per clause) apply only to the legacy
+standalone tool. The brain is ~0.1–0.2 s. See §8.
 
 **Can I use a different brain?**
 Yes: `--brain-model`, `--brain-api`, `--brain-url`, `--brain-key`. Any
 OpenAI-compatible endpoint works.
 
 **Can I use a different voice?**
-The voice path is XTTS with a reference clip. Replace `assets/rocky_ref_15s.wav`
-and restart the server. The upstream `GUIDE.md` covers RVC and other models.
+The desktop app uses Kokoro; select another preset with `--kokoro-voice`, or
+use an installed macOS voice with `--tts-engine macos`. The separate legacy
+`rocky_say.py` tool uses XTTS and a reference clip.
 
 **Why does the camera not work from `python`?**
 macOS attributes camera access to the app bundle. Launch `Rocky.app`, not a bare

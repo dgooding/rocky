@@ -11,10 +11,21 @@ All numbers are wall-clock measurements on the development machine:
 They are not vendor benchmarks. Re-run them on your machine before making
 decisions.
 
+These XTTS timings are a historical baseline for the legacy standalone tool,
+not the desktop app's current Kokoro voice path. Kokoro's first use took about
+10.8 s including dependency/model setup. In a later single local smoke check,
+the first phrase in a process took 3.41 s and the next phrase took 0.30 s.
+These are individual timings, not a statistically meaningful benchmark.
+The XTTS timing below predates the PCM playback change and is unchanged by it:
+XTTS still generates a complete WAV before playback. Playback now writes 20 ms
+blocks to the output device, but its device latency has not yet been measured.
+
 ## Summary
 
 | Stage | Measured | Notes |
 |---|---:|---|
+| Kokoro first phrase in process | 3.41 s | Single smoke check; loaded model cache |
+| Kokoro next phrase, same process | 0.30 s | Single smoke check; not p50/p95 |
 | XTTS server cold load | ~22 s | Weights already downloaded |
 | XTTS `"Hi."` | 3.77 s | 2.37 s of audio |
 | XTTS `"Hello friend."` | 2.77 s | 1.72 s of audio |
@@ -155,7 +166,7 @@ it cannot make the first clause arrive sooner.
 | Playback buffer | 20–50 ms |
 | **First sound** | **500–800 ms cascade / 300–700 ms speech-to-speech** |
 
-A pre-generated backchannel in Rocky's voice can mask the remaining gap and make
+A pre-generated local assistant backchannel can mask the remaining gap and make
 the interaction feel faster than the measured time-to-first-word.
 
 See [`REALTIME_PLAN.md`](REALTIME_PLAN.md) for the implementation plan and

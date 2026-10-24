@@ -29,8 +29,8 @@ camera access and accept that the identity is less stable.
 ### No sound
 
 - Check the system output device.
-- The app uses `pygame.mixer`; a device change after startup may require a
-  restart.
+- Playback uses `sounddevice.OutputStream`; a device change after startup may
+  require a restart. The `pygame` dependency is for the window and UI.
 - Look for `[audio]` lines in `~/Library/Logs/Rocky.log` (bundle) or
   `$TMPDIR/rocky-desk.log`.
 
@@ -169,6 +169,14 @@ own backup:
 ```
 
 ### The voice sounds wrong or robotic
+
+For the desktop app, Kokoro is the default local voice. Try another preset with
+`--kokoro-voice`; `--tts-engine macos` selects an installed system voice.
+Kokoro's warm latency and voice quality across presets have not yet been
+benchmarked.
+
+The following asset advice applies only to the separate legacy `rocky_say.py`
+XTTS tool:
 
 - Use `assets/rocky_ref_15s.wav` (preferred over the 2:10 clip).
 - Check `ROCKY_SPEED` (default 1.25). Lower it for more natural pacing, at the

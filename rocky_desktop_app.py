@@ -2,7 +2,7 @@
 """
 Rocky - a desk companion you can talk to.
 
-Speak (or type) -> local speech-to-text -> local LLM -> Rocky's cloned voice,
+Speak (or type) -> local speech-to-text -> local LLM -> British Kokoro speech,
 with eyes that morph through emotion presets and bounce to the audio.
 
 Everything runs on this machine; no cloud, no keys.
@@ -32,15 +32,16 @@ Controls
     1-7                       force an emotion (when the input line is empty)
     Esc                       quit
 
-Latency: the first sound of a reply takes STT + LLM + one sentence of XTTS
-(~4-6s here). Sentences are generated ahead of playback, so a multi-sentence
-reply does not stutter between sentences.
+Speech defaults to local Kokoro with a British voice preset. Sentences are
+generated ahead of playback, so a multi-sentence reply does not stutter between
+sentences.
 """
 from __future__ import annotations
 
 import argparse
 import base64
 import collections
+import http.client
 import io
 import json
 import math
@@ -48,7 +49,9 @@ import os
 import queue
 import random
 import re
+import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.error
@@ -75,16 +78,18 @@ WARN = (240, 150, 150)
 REC = (255, 90, 90)
 FPS = 60
 FONT_NAME = "menlo,monospace"
-HINT = "F1/F2 talk  F3 look  F4 hands-free  F5 watch  Esc quit"
+HINT = "F1 talk/interrupt  F2 talk  F3 look  F4 hands-free  F5 watch  Esc quit"
 
 LISTENING, THINKING, SPEAKING, IDLE = "LISTENING", "THINKING", "SPEAKING", "IDLE"
 LABELS = {LISTENING: "listening...", THINKING: "thinking...", SPEAKING: "speaking"}
 
 SYSTEM_PROMPT = (
-    "You are Rocky, the Eridian engineer from Project Hail Mary: an alien who "
-    "talks in short, blunt, warm sentences. You are endlessly curious and you "
-    "love your human friend. Answer in ONE short sentence of at most 12 words, "
-    "plain English, no lists, no markdown. Never mention being an AI or a model."
+    "You are a helpful personal assistant. Speak in natural, contemporary "
+    "British English with a warm, thoughtful, conversational manner. Use "
+    "contractions and varied sentence rhythm; avoid roleplay, catchphrases, "
+    "repetitive phrasing, and exaggerated emotion. Keep answers concise but "
+    "use as much detail as the question needs. Do not claim to be human; "
+    "answer honestly if asked whether you are an AI."
 )
 
 VISION_PROMPT = "In one short sentence, describe the main thing you see."
@@ -123,50 +128,53 @@ quiet_until = 0.0    # hands-free listening ignores the mic until this time
 face_pos = None      # (x, y) in -1..1 of the face the webcam sees, or None
 awake_until = 0.0    # hands-free answers without "hey Rocky" until this time
 gaze_override = None  # ((x, y), until) - where he was asked to look
+response_cancel = threading.Event()
+TTS_ENGINE = "kokoro"
+SYSTEM_VOICE = "Samantha"
+SYSTEM_VOICE_RATE = 185
+KOKORO_VOICE = "bf_emma"
+_KOKORO_PIPELINE = None
 
 
 # --- audio --------------------------------------------------------------
-def rms_envelope(wav_bytes: bytes, frame_ms: int = 30):
-    data, rate = sf.read(io.BytesIO(wav_bytes), dtype="float32", always_2d=True)
-    mono = data.mean(axis=1)
-    step = max(1, int(rate * frame_ms / 1000))
-    env = [float(np.sqrt(np.mean(mono[i:i + step] ** 2)))
-           for i in range(0, len(mono), step)]
-    peak = max(env) if env else 0.0
+def audio_chunks(audio: np.ndarray, rate: int, chunk_ms: int = 20):
+    """Yield short PCM blocks and normalized RMS values for playback."""
+    frames = max(1, int(rate * chunk_ms / 1000))
+    chunks = (audio[i:i + frames] for i in range(0, len(audio), frames))
+    peak = max(
+        (float(np.sqrt(np.mean(np.square(chunk)))) for chunk in chunks),
+        default=0.0,
+    )
     if peak <= 0:
-        return [], rate, 0.0
-    return [min(1.0, (v / peak) ** 0.6) for v in env], rate, len(mono) / rate
+        return
+    for i in range(0, len(audio), frames):
+        chunk = audio[i:i + frames]
+        rms = float(np.sqrt(np.mean(np.square(chunk))))
+        yield chunk, min(1.0, (rms / peak) ** 0.6)
 
 
-def play_with_envelope(wav_bytes: bytes) -> None:
-    """Play a clip, publishing `amplitude` while it runs."""
+def play_with_envelope(wav_bytes: bytes, cancel_event: threading.Event | None = None) -> None:
+    """Stream decoded PCM in short blocks, publishing its RMS for the eyes."""
     global amplitude, note, quiet_until
-    env, rate, duration = rms_envelope(wav_bytes)
-    if not env:
+    import sounddevice as sd
+
+    audio, rate = sf.read(io.BytesIO(wav_bytes), dtype="float32", always_2d=True)
+    if not len(audio) or not np.any(audio):
         note = "generated audio was empty"
         return
-    clip = os.path.join(rocky.LOGS_DIR, "desk_last.wav")
-    with open(clip, "wb") as f:
-        f.write(wav_bytes)
     try:
-        if not pygame.mixer.get_init():
-            pygame.mixer.init(frequency=rate, size=-16, channels=1, buffer=512)
-        elif pygame.mixer.get_init()[0] != rate:
-            pygame.mixer.quit()
-            pygame.mixer.init(frequency=rate, size=-16, channels=1, buffer=512)
-        chan = pygame.mixer.Sound(clip).play()
-    except pygame.error as e:
+        with sd.OutputStream(samplerate=rate, channels=audio.shape[1], dtype="float32",
+                             blocksize=0, latency="low") as stream:
+            for chunk, level in audio_chunks(audio, rate):
+                if cancel_event is not None and cancel_event.is_set():
+                    break
+                stream.write(chunk)
+                amplitude = level
+    except sd.PortAudioError as e:
         note = f"audio device error: {e}"
         print(f"[audio] {note}", file=sys.stderr)
-        return
-
-    frame = duration / len(env)
-    t0 = time.monotonic()
-    while chan.get_busy() and time.monotonic() - t0 < duration + 1.5:
-        i = int((time.monotonic() - t0) / frame)
-        amplitude = env[i] if 0 <= i < len(env) else 0.0
-        time.sleep(0.016)
-    amplitude = 0.0
+    finally:
+        amplitude = 0.0
     # Let the room echo die down before hands-free listening resumes.
     quiet_until = time.monotonic() + 0.4
 
@@ -285,12 +293,13 @@ class Ears:
     RATE = 16000
     FRAME = 320  # 20 ms
 
-    def __init__(self) -> None:
+    def __init__(self, end_silence_ms: int = 700) -> None:
         self.enabled = False
         self.error = ""
         self.stream = None
         self.frames: queue.Queue = queue.Queue(maxsize=500)
-        self.endpointer = Endpointer(self.RATE, 1000 * self.FRAME // self.RATE)
+        self.endpointer = Endpointer(self.RATE, 1000 * self.FRAME // self.RATE,
+                                     end_ms=end_silence_ms)
         self.thread = None
 
     def start(self) -> bool:
@@ -546,6 +555,18 @@ class Brain:
         # ever sends a persona + one line, so 8k keeps it at ~19 GB.
         self.context = context
         self.checked = None
+        self._response_lock = threading.Lock()
+        self._active_response = None
+
+    def cancel(self) -> None:
+        """Close the active text stream so an interrupted turn can finish."""
+        with self._response_lock:
+            response = self._active_response
+        if response is not None:
+            try:
+                response.close()
+            except OSError as e:
+                print(f"[brain] could not close interrupted response: {e}", file=sys.stderr)
 
     def available(self) -> bool:
         if not self.enabled:
@@ -669,15 +690,31 @@ class Brain:
             if delta:
                 yield delta
 
-    def stream(self, text: str):
+    def stream(self, text: str, cancel_event: threading.Event | None = None):
         """Yield content deltas as they arrive."""
-        if not self.available():
+        if (cancel_event is not None and cancel_event.is_set()) or not self.available():
             return
+        response = None
         try:
-            with urllib.request.urlopen(self._request(text), timeout=120) as r:
-                yield from self._deltas(r)
-        except (urllib.error.URLError, TimeoutError) as e:
-            print(f"[brain] {e}", file=sys.stderr)
+            response = urllib.request.urlopen(self._request(text), timeout=120)
+            with self._response_lock:
+                self._active_response = response
+            if cancel_event is not None and cancel_event.is_set():
+                return
+            for delta in self._deltas(response):
+                if cancel_event is not None and cancel_event.is_set():
+                    break
+                yield delta
+        except (urllib.error.URLError, TimeoutError, ValueError, OSError,
+                http.client.HTTPException) as e:
+            if cancel_event is None or not cancel_event.is_set():
+                print(f"[brain] {e}", file=sys.stderr)
+        finally:
+            with self._response_lock:
+                if self._active_response is response:
+                    self._active_response = None
+            if response is not None:
+                response.close()
 
     def vision_stream(self, prompt: str = "Describe the scene.", jpeg: bytes = b""):
         """Stream a description of one camera frame."""
@@ -737,24 +774,37 @@ def split_sentences(text: str, limit: int = 150):
 
 
 # --- pipeline -----------------------------------------------------------
-def warm_voice() -> None:
-    """Make sure the XTTS server is resident before the first reply."""
-    try:
-        with urllib.request.urlopen(f"http://127.0.0.1:{rocky.SERVER_PORT}/health", timeout=2):
-            return
-    except Exception:  # noqa: BLE001
-        pass
-    print("[voice] starting XTTS server (one-time ~30s load)...", file=sys.stderr)
-    rocky.server_start()
-
-
 def synthesize(text: str):
-    spoken = rocky.rocky_transform(text)
-    wav = rocky.generate_via_server(spoken)
-    if wav is None:
-        warm_voice()
-        wav = rocky.generate_via_server(spoken)
-    return spoken, wav
+    global _KOKORO_PIPELINE
+    if TTS_ENGINE == "kokoro":
+        if _KOKORO_PIPELINE is None:
+            from kokoro import KPipeline
+            _KOKORO_PIPELINE = KPipeline(lang_code="b")
+        chunks = [audio for _, _, audio in _KOKORO_PIPELINE(
+            text, voice=KOKORO_VOICE, speed=1.0
+        )]
+        if not chunks:
+            raise RuntimeError("Kokoro produced no speech audio")
+        audio = np.concatenate(chunks)
+        wav = io.BytesIO()
+        sf.write(wav, audio, 24000, format="WAV", subtype="PCM_16")
+        return text, wav.getvalue()
+
+    if TTS_ENGINE == "macos":
+        with tempfile.TemporaryDirectory(prefix="rocky-voice-") as directory:
+            audio_path = os.path.join(directory, "reply.aiff")
+            result = subprocess.run(
+                ["/usr/bin/say", "-v", SYSTEM_VOICE, "-r", str(SYSTEM_VOICE_RATE),
+                 "-o", audio_path, text],
+                capture_output=True, text=True, timeout=60, check=False,
+            )
+            if result.returncode:
+                detail = result.stderr.strip() or f"say exited with status {result.returncode}"
+                raise RuntimeError(f"macOS voice {SYSTEM_VOICE!r} failed: {detail}")
+            with open(audio_path, "rb") as audio_file:
+                return text, audio_file.read()
+
+    raise RuntimeError(f"unsupported TTS engine: {TTS_ENGINE}")
 
 
 def clause_split(sentence: str, first: bool = False, first_limit: int = 38,
@@ -779,10 +829,13 @@ def clause_split(sentence: str, first: bool = False, first_limit: int = 38,
     return chunks
 
 
-def sentence_stream(brain: Brain, text: str):
+def sentence_stream(brain: Brain, text: str,
+                    cancel_event: threading.Event | None = None):
     """Turn streamed LLM deltas into sentences, yielding each as it completes."""
     buf = ""
-    for delta in brain.stream(text):
+    for delta in brain.stream(text, cancel_event=cancel_event):
+        if cancel_event is not None and cancel_event.is_set():
+            return
         buf += delta
         while True:
             m = re.search(r"[.!?](\s|$)", buf)
@@ -796,27 +849,48 @@ def sentence_stream(brain: Brain, text: str):
         yield buf.strip()
 
 
-def speak(sentences) -> None:
+def speak(sentences, cancel_event: threading.Event | None = None) -> None:
     """Synthesize ahead of playback; start talking as soon as clause 1 exists."""
     global state, subtitle, eyes_emotion
     prefetch: queue.Queue = queue.Queue(maxsize=3)
     said = ""
 
+    def enqueue(item) -> bool:
+        while cancel_event is None or not cancel_event.is_set():
+            try:
+                prefetch.put(item, timeout=0.05)
+                return True
+            except queue.Full:
+                continue
+        return False
+
     def produce():
+        global note
         try:
             first = True
             for sentence in sentences:
+                if cancel_event is not None and cancel_event.is_set():
+                    break
                 for chunk in clause_split(sentence, first=first):
-                    prefetch.put(synthesize(chunk))
+                    if cancel_event is not None and cancel_event.is_set():
+                        break
+                    if not enqueue(synthesize(chunk)):
+                        return
                     first = False
         except Exception as e:  # noqa: BLE001
+            note = f"voice error: {e}"[:68]
             print(f"[tts] {e}", file=sys.stderr)
         finally:
-            prefetch.put(None)
+            enqueue(None)
 
     threading.Thread(target=produce, daemon=True).start()
     while True:
-        item = prefetch.get()
+        if cancel_event is not None and cancel_event.is_set():
+            break
+        try:
+            item = prefetch.get(timeout=0.05)
+        except queue.Empty:
+            continue
         if item is None:
             break
         spoken, wav = item
@@ -826,10 +900,11 @@ def speak(sentences) -> None:
         if wav is None:
             continue
         state = SPEAKING
-        play_with_envelope(wav)
+        play_with_envelope(wav, cancel_event=cancel_event)
 
 
-def look(camera, brain: Brain, question: str = "") -> None:
+def look(camera, brain: Brain, question: str = "",
+         cancel_event: threading.Event | None = None) -> None:
     """Take one webcam frame and answer about it (F3, or a spoken 'look')."""
     global state, subtitle, note, eyes_emotion
     state, eyes_emotion, subtitle = THINKING, "thinking", "looking..."
@@ -849,7 +924,7 @@ def look(camera, brain: Brain, question: str = "") -> None:
         note, state = f"no vision reply - try: ollama pull {brain.vision_model}", IDLE
         return
     print(f"[rocky] {reply}", file=sys.stderr)
-    speak(split_sentences(reply))
+    speak(split_sentences(reply), cancel_event)
     state = IDLE
 
 
@@ -862,11 +937,11 @@ def stay_awake() -> None:
     awake_until = time.monotonic() + AWAKE_SECONDS
 
 
-def say_line(line: str) -> None:
+def say_line(line: str, cancel_event: threading.Event | None = None) -> None:
     """Speak a fixed line, e.g. to confirm a voice command."""
     global state
     state = THINKING
-    speak([line])
+    speak([line], cancel_event)
     state = IDLE
 
 
@@ -876,10 +951,11 @@ def worker(transcriber: Transcriber, brain: Brain, camera, watcher=None) -> None
         job = jobs.get()
         if job is None:
             return
+        response_cancel.clear()
         try:
             note = ""
             if job.get("look") is not None:
-                look(camera, brain)
+                look(camera, brain, cancel_event=response_cancel)
                 continue
 
             event = job.get("event")
@@ -926,22 +1002,22 @@ def worker(transcriber: Transcriber, brain: Brain, camera, watcher=None) -> None
 
             if SLEEP_PATTERN.match(text):
                 awake_until = 0.0
-                say_line("Goodnight, friend.")
+                say_line("Goodnight, friend.", response_cancel)
                 eyes_emotion = "sleepy"
                 continue
             stay_awake()
 
             if TRACK_OFF_PATTERN.search(text) or TRACK_ON_PATTERN.search(text):
                 if watcher is None:
-                    say_line("No camera, friend.")
+                    say_line("No camera, friend.", response_cancel)
                 elif TRACK_OFF_PATTERN.search(text):
                     watcher.stop()
-                    say_line("Okay. Stop watching.")
+                    say_line("Okay. Stop watching.", response_cancel)
                 elif watcher.start():
-                    say_line("Watching you, friend.")
+                    say_line("Watching you, friend.", response_cancel)
                 else:
                     note = f"watching failed: {watcher.error}"
-                    say_line("Cannot see. Camera problem.")
+                    say_line("Cannot see. Camera problem.", response_cancel)
                 continue
 
             if camera is not None and LOOK_PATTERN.search(text):
@@ -957,11 +1033,14 @@ def worker(transcriber: Transcriber, brain: Brain, camera, watcher=None) -> None
             state, eyes_emotion = THINKING, "thinking"
             if brain.available():
                 print(f"[you] {text}", file=sys.stderr)
-                speak(sentence_stream(brain, text))
+                speak(sentence_stream(brain, text, response_cancel), response_cancel)
             else:
                 # echo mode: he repeats you back in his own grammar
                 print(f"[rocky] {text}", file=sys.stderr)
-                speak(split_sentences(text))
+                speak(split_sentences(text), response_cancel)
+            if response_cancel.is_set():
+                state = IDLE
+                continue
             state = IDLE
             stay_awake()
         except Exception as e:  # noqa: BLE001
@@ -1005,7 +1084,6 @@ def render(screen, font, small, t, st, said, msg, typed, recording, eyes,
 def run(mic: Mic, transcriber: Transcriber, brain: Brain, camera=None,
         ears=None, watcher=None, hands_free: bool = True, watch: bool = False) -> None:
     global state, mic_recording, note
-    pygame.mixer.pre_init(24000, -16, 1, 512)
     pygame.init()
     pygame.display.set_caption("Rocky")
     screen = pygame.display.set_mode((W, H))
@@ -1016,7 +1094,6 @@ def run(mic: Mic, transcriber: Transcriber, brain: Brain, camera=None,
 
     threading.Thread(target=worker, args=(transcriber, brain, camera, watcher),
                      daemon=True).start()
-    threading.Thread(target=warm_voice, daemon=True).start()
     threading.Thread(target=transcriber.warm, daemon=True).start()
     threading.Thread(target=brain.warm, daemon=True).start()
     if ears is not None and hands_free and not ears.start():
@@ -1042,6 +1119,10 @@ def run(mic: Mic, transcriber: Transcriber, brain: Brain, camera=None,
                 if e.key == pygame.K_ESCAPE:
                     running = False
                 elif e.key == pygame.K_F1:
+                    if state in (THINKING, SPEAKING):
+                        response_cancel.set()
+                        brain.cancel()
+                        state = IDLE
                     recording = mic.start()
                     mic_recording = recording
                 elif e.key == pygame.K_F2:
@@ -1224,6 +1305,18 @@ def senses_selftest() -> bool:
     print(f"[selftest] hearing endpointer: {events} -> {'ok' if heard_ok else 'FAIL'}")
     ok = ok and heard_ok
 
+    fast_ep = Endpointer(rate, 20, end_ms=300)
+    fast_events = []
+    for i in range(0, len(stream) - frame + 1, frame):
+        event = fast_ep.push(stream[i:i + frame])
+        if event:
+            fast_events.append((event[0], 0 if event[1] is None else len(event[1]) / rate))
+    faster_end_ok = (len(fast_events) == 2 and fast_events[-1][0] == "end"
+                     and fast_events[-1][1] < events[-1][1])
+    print(f"[selftest] configurable endpoint pause: "
+          f"{'ok' if faster_end_ok else 'FAIL'}")
+    ok = ok and faster_end_ok
+
     clicks, ep = [], Endpointer(rate, 20)  # a short click must not become an utterance
     blip = np.concatenate([np.zeros(rate // 2, np.float32), 0.3 * np.ones(1600, np.float32),
                            np.zeros(rate, np.float32)])
@@ -1256,6 +1349,29 @@ def senses_selftest() -> bool:
     print(f"[selftest] hearing commands (wake/sleep/track): {'ok' if commands_ok else 'FAIL'}")
     ok = ok and commands_ok
 
+    cancel = threading.Event()
+
+    class CancellingBrain:
+        def stream(self, text, cancel_event=None):
+            yield "First sentence. "
+            cancel_event.set()
+            yield "This sentence must not be returned."
+
+    interrupted = list(sentence_stream(CancellingBrain(), "test", cancel))
+    cancel_ok = interrupted == ["First sentence."]
+    print(f"[selftest] response cancellation: {'ok' if cancel_ok else 'FAIL'}")
+    ok = ok and cancel_ok
+
+    pcm = np.concatenate((np.full((480, 1), 0.5, np.float32),
+                          np.full((480, 1), 0.25, np.float32),
+                          np.zeros((100, 1), np.float32)))
+    blocks = list(audio_chunks(pcm, 24000))
+    pcm_ok = ([len(block) for block, _ in blocks] == [480, 480, 100]
+              and blocks[0][1] == 1.0 and 0.6 < blocks[1][1] < 0.7
+              and blocks[2][1] == 0.0)
+    print(f"[selftest] PCM playback chunks: {'ok' if pcm_ok else 'FAIL'}")
+    ok = ok and pcm_ok
+
     try:
         import cv2
         cascade = cv2.CascadeClassifier(
@@ -1269,6 +1385,7 @@ def senses_selftest() -> bool:
 
 
 def main() -> None:
+    global TTS_ENGINE, SYSTEM_VOICE, KOKORO_VOICE
     ap = argparse.ArgumentParser(description="Rocky desk companion")
     ap.add_argument("--no-brain", action="store_true", help="skip the LLM; echo what you say")
     ap.add_argument("--brain-model", default="qwen3-coder:latest")
@@ -1294,11 +1411,29 @@ def main() -> None:
                     help="grab one camera frame, save it, exit (permission check)")
     ap.add_argument("--stt-model", default="base.en",
                     help="tiny.en / base.en / small.en")
+    ap.add_argument("--end-silence-ms", type=int, default=700, metavar="MS",
+                    help="quiet time before hands-free utterances end (200-2000; default 700)")
+    ap.add_argument("--tts-engine", choices=["kokoro", "macos"], default="kokoro",
+                    help="local speech voice: British Kokoro (default) or macOS system voice")
+    ap.add_argument("--system-voice", default="Samantha",
+                    help="installed macOS voice name for --tts-engine macos (default Samantha)")
+    ap.add_argument("--kokoro-voice", default="bf_emma",
+                    help="Kokoro voice preset (default bf_emma, British English)")
     ap.add_argument("--selftest", action="store_true", help="verify stt/brain/eyes, no mic")
     args = ap.parse_args()
 
+    if not 200 <= args.end_silence_ms <= 2000:
+        ap.error("--end-silence-ms must be between 200 and 2000")
+
     if args.selftest:
         sys.exit(selftest(args.no_brain))
+
+    TTS_ENGINE, SYSTEM_VOICE, KOKORO_VOICE = (
+        args.tts_engine, args.system_voice, args.kokoro_voice
+    )
+    selected_voice = (f" ({KOKORO_VOICE})" if TTS_ENGINE == "kokoro" else
+                      f" ({SYSTEM_VOICE})" if TTS_ENGINE == "macos" else "")
+    print(f"[voice] {TTS_ENGINE}{selected_voice}", file=sys.stderr)
 
     if args.snap:
         try:
@@ -1323,7 +1458,8 @@ def main() -> None:
         print("[brain] no LLM available - Rocky will repeat what you say", file=sys.stderr)
     camera = None if args.no_camera else Camera(args.camera_index)
     watcher = None if camera is None else Watcher(camera)
-    run(Mic(), Transcriber(args.stt_model), brain, camera, ears=Ears(), watcher=watcher,
+    run(Mic(), Transcriber(args.stt_model), brain, camera,
+        ears=Ears(end_silence_ms=args.end_silence_ms), watcher=watcher,
         hands_free=not args.push_to_talk, watch=args.watch)
 
 

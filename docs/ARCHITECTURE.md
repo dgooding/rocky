@@ -14,9 +14,9 @@ Rocky.app (launcher shell)
     ├── ears thread: continuous mic frames → Endpointer → jobs (hands-free)
     ├── watcher thread (watch mode only): webcam → face detection → face_pos, jobs
     ├── TTS producer thread (one per reply): synthesize ahead of playback
-    └── startup warmers: voice server, whisper model, brain model
+    └── startup warmers: Kokoro voice, whisper model, brain model
 
-rocky_say.py --server start
+rocky_say.py --server start (standalone legacy tool)
 └── separate process: XTTS v2 + HTTP server on 127.0.0.1:59720
 
 Ollama
@@ -27,7 +27,8 @@ Ollama
 The main thread never blocks on network or model work. The worker owns the
 conversation pipeline. The TTS producer is a per-reply daemon thread feeding a
 bounded `queue.Queue(maxsize=3)` so synthesis can run ahead of playback without
-unbounded memory growth.
+unbounded memory growth. Speech is generated locally by Kokoro by default;
+macOS `say` is an alternative backend. The legacy XTTS tool is separate.
 
 ## State
 
@@ -40,8 +41,12 @@ The UI reads module-level state:
 - `eyes_emotion` — selected emotion preset
 
 The worker and audio callback update these; the render loop snapshots them at
-60 FPS. This is intentionally simple. A real-time build should replace it with a
-small thread-safe state object plus an asyncio event bus.
+60 FPS. This is intentionally simple. F1 can cancel the active text response
+and playback to start push-to-talk. An in-process Kokoro synthesis request already in flight
+may finish in the background. Automatic voice interruption is not enabled
+because the microphone remains paused during playback to avoid self-hearing.
+A real-time build should replace this with a small thread-safe state object plus
+an asyncio event bus.
 
 ## Pipeline
 
@@ -52,7 +57,8 @@ Two paths feed the same `jobs` queue:
 - **Hands-free (`Ears`, default).** A continuous 16 kHz mono stream in 20 ms
   frames goes to `Endpointer`, which tracks an adaptive noise floor, starts an
   utterance after 80 ms of loud frames (keeping 300 ms of pre-roll), and ends
-  it after 700 ms of quiet; utterances under 250 ms of speech are dropped. Ears
+  it after a configurable quiet interval (700 ms by default, 200–2000 ms);
+  utterances under 250 ms of speech are dropped. Ears
   ignore the mic unless Rocky is idle or listening, and for 0.4 s after his
   audio stops, because there is no echo cancellation. In the worker, an
   utterance is answered only if it contains "hey Rocky" or he is still awake
@@ -86,23 +92,20 @@ be synthesized while the rest of the reply is still being generated.
 
 ### 4. Voice
 
-`synthesize()` applies `rocky_transform()` (the upstream grammar rewrite) and
-calls the XTTS server with `POST /` and `{"text": "..."}`. The server returns a
-complete WAV. The server caches XTTS conditioning latents at startup:
-
-```python
-gpt_cond, spk_emb = model.get_conditioning_latents(audio_path=[REFERENCE])
-out = model.inference(text, "en", gpt_cond, spk_emb, speed=SPEED)
-```
-
-`ROCKY_SPEED` defaults to 1.25. The server is single-threaded.
+By default, `synthesize()` uses Kokoro's `bf_emma` British English voice and
+returns 24 kHz PCM in a WAV container. `KPipeline` is loaded once per app
+process; weights are downloaded and cached on first use. Select another preset
+with `--kokoro-voice`. `--tts-engine macos` uses the installed system voice.
+The separate legacy `rocky_say.py` tool continues to use XTTS and voice assets.
 
 ### 5. Playback
 
-`play_with_envelope()` writes the WAV to `logs/desk_last.wav`, loads it into
-`pygame.mixer.Sound`, plays it, and publishes an RMS envelope for the eyes. It
-waits for the channel to become idle. This is blocking and not cancelable at
-sample granularity.
+`play_with_envelope()` decodes the complete AIFF/WAV to float PCM, then writes 20 ms
+blocks to `sounddevice.OutputStream` and publishes each block's RMS for the
+eyes. Cancellation is checked between writes, so stop latency is bounded by a
+small audio block plus the device buffer. This streams playback, not synthesis:
+the selected voice engine produces its audio for the clause before the first
+block can play.
 
 ### 6. Vision
 
@@ -140,10 +143,10 @@ The top-right of the window always shows which senses are on.
 |---|---|---|
 | Mic | continuous 20 ms frames + energy endpointer (hands-free); push-to-talk | add Silero VAD |
 | STT | batch faster-whisper | streaming Nova-3 / Ink 2 / WhisperKit |
-| Turn detection | 700 ms of quiet, or key release | Silero VAD + Smart Turn v3 / semantic VAD |
+| Turn detection | configurable 200–2000 ms energy silence (700 ms default), or key release | Silero VAD + Smart Turn v3 / semantic VAD |
 | Brain | streamed tokens | unchanged, maybe cloud |
 | TTS | HTTP full WAV | WebSocket PCM chunks, cancelable |
-| Playback | `pygame.mixer` | `sounddevice.RawOutputStream` ring buffer |
+| Playback | per-clip `sounddevice.OutputStream`, 20 ms PCM writes | persistent output stream / PCM ring buffer |
 | Barge-in | none (mic ignored while he speaks) | VAD during playback + cancel/flush |
 | AEC | none | `AVAudioEngine` voice processing |
 | Vision | on-request snapshot + opt-in face watcher | scene gating + on-demand VLM |
@@ -153,14 +156,18 @@ The top-right of the window always shows which senses are on.
 
 1. **No overlap between listening and speaking.** The worker blocks in `speak()`
    until playback ends, and hands-free listening is paused meanwhile.
-2. **Full-WAV TTS.** Playback cannot start until the entire clause is
-   synthesized. XTTS takes 2.4–3.8 s per clause here.
-3. **Simple endpointing.** A fixed 700 ms pause ends a turn; it cannot tell a
-   finished sentence from a thinking pause the way Smart Turn can.
+2. **Full-clause TTS.** Playback streams small PCM blocks, but cannot start
+   until the clause is synthesized. One Kokoro smoke check measured 0.30 s for
+   a subsequent phrase in the same process; the 2.4–3.8 s XTTS figures are
+   legacy-tool results, and neither is a statistical benchmark.
+3. **Simple endpointing.** A configurable energy pause (700 ms default) ends a
+   turn; it cannot tell a finished sentence from a thinking pause the way Smart
+   Turn can.
 4. **No cancellation.** Stopping mid-reply would require killing the worker or
    the TTS request; there is no audio-buffer flush.
 5. **No AEC.** Opening the mic during playback would feed Rocky's own voice back
    into the recognizer, which is why hands-free listening pauses while he speaks.
+   F1 provides manual interruption; automatic voice barge-in still requires AEC.
 6. **Vision is still on request.** Watch mode follows faces, but there is no
    scene-change gating to decide when a fresh look is worth a VLM call.
 

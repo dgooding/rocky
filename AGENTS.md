@@ -1,16 +1,16 @@
 # Rocky — agent instructions
 
-Rocky is a local-first macOS desk companion: the on-screen version of Casey
-Grothaus's [desk robot](https://github.com/cgro00/desk-robot)
-([video](https://www.youtube.com/shorts/aHSusA0xXjU)). Say "hey Rocky" and he
-looks at you and answers in character, in a cloned voice, with animated eyes.
+Rocky is a local-first macOS desk companion with animated eyes inspired by
+Casey Grothaus's [desk robot](https://github.com/cgro00/desk-robot)
+([video](https://www.youtube.com/shorts/aHSusA0xXjU)). Hearing, sight, and
+assistant personality are implemented in this app.
 Start with [`HANDOFF.md`](HANDOFF.md) for state, constraints, and phases. When
-in doubt about how Rocky should behave, match that robot.
+in doubt about the interaction style, use a natural, concise assistant voice.
 
 **Scope (owner decision):** work only on this app (`rocky_desktop_app.py` and
-its helpers). Do not add outside apps, trial kits, or new services. Rocky has
-two senses here: **hearing** (hands-free voice recognition) and **sight**
-(webcam).
+its helpers). Do not add outside apps or cloud services. The assistant uses
+Kokoro's local British voice and a neutral, conversational personality; do not
+reintroduce the cloned Rocky voice or character mannerisms.
 
 ## Current task: set up Rocky on this Mac and verify his senses
 
@@ -21,19 +21,18 @@ audio, fake camera frames, and a fake brain. Verify them for real.
    - `brew install python@3.11 ffmpeg`, Ollama installed and running
      (`curl -s http://127.0.0.1:11434/api/tags`).
    - `./setup.sh` (creates `./venv`).
-   - `./scripts/fetch_assets.sh` downloads everything large that is not in git:
-     Rocky's voice files (from the upstream author's published links), the
-     Ollama models, and the faster-whisper and XTTS caches (~23 GB, once). It
-     asks the user to confirm personal, non-commercial use; let the user answer
-     (do not pass `--yes` for them). If they have their own backup,
-     `./scripts/restore_assets.sh /path/to/backup` instead. Never invent or
-     commit voice files.
+   - Kokoro `bf_emma` (British English) is the default local voice; the model
+     is cached on first use. The legacy standalone `rocky_say.py` tool still
+     needs private Rocky voice assets if used. `./scripts/fetch_assets.sh`
+     downloads those assets and additional model caches (~23 GB); it asks for
+     personal, non-commercial-use confirmation. Let the user answer (never
+     pass `--yes` for them). Never invent or commit voice files.
 2. **Self-test:** `./venv/bin/python rocky_desktop_app.py --selftest`. Expect
    `ok` for `hearing endpointer`, `hearing ignores a click`, `sight
    look-intent`, `hearing commands (wake/sleep/track)`, and `sight face
    detector`.
-3. **Start the voice server** (`make server-start`, ~20 s first load), then
-   build and open the app: `./scripts/make_app.sh && open -n ./Rocky.app`.
+3. No voice server is needed for the default Kokoro voice. Build and open:
+   `./scripts/make_app.sh && open -n ./Rocky.app`.
    The bundle is what gets microphone and camera permission on macOS.
 4. **Walk the user through these checks.** You cannot speak or listen; the user
    does them and tells you what happened. The top-right of the window shows
@@ -43,7 +42,7 @@ audio, fake camera frames, and a fake brain. Verify them for real.
    |---|---|---|
    | 1 | Talks normally near the Mac without saying his name | No reply (he is asleep) |
    | 2 | "Hey Rocky" | Eyes look up; indicator shows `awake`; no speech |
-   | 3 | "How are you?" (no name) | He answers in Rocky's voice |
+   | 3 | "How are you?" (no name) | He answers in the selected local voice |
    | 4 | "What am I holding?" while holding something | Camera look; answer about the object |
    | 5 | "Rocky, look left" | Eyes turn, then he describes what he sees |
    | 6 | "Track me", then moves left and right | `watching` shows; camera light on; eyes follow |
@@ -69,7 +68,7 @@ All hearing/sight knobs are near the top of `rocky_desktop_app.py` or in
   differently, extend `WAKE_PATTERN`. If speech is never detected, lower the
   floor in `Endpointer.threshold()` (`0.012`).
 - **He wakes on noise or cuts you off:** raise `Endpointer.threshold()`, or
-  raise `end_ms` (700) so pauses do not end your turn. Add any phantom words
+  raise `--end-silence-ms` (700 default) so pauses do not end your turn. Add any phantom words
   faster-whisper invents in room noise to `PHANTOM_PHRASES`.
 - **He answers his own voice:** raise the 0.4 s tail in `play_with_envelope`
   (`quiet_until`). There is no echo cancellation yet.
@@ -111,8 +110,8 @@ endpointing; `openWakeWord` so he does not transcribe room talk while asleep.
 | Task | Command |
 |---|---|
 | Install Rocky's dependencies | `./setup.sh` |
-| Download voice files and models (not in git) | `./scripts/fetch_assets.sh` (or `make fetch`) |
-| Start / stop Rocky's voice server | `make server-start` / `make server-stop` |
+| Download legacy voice files and models (not in git) | `./scripts/fetch_assets.sh` (or `make fetch`) |
+| Start / stop legacy voice server | `make server-start` / `make server-stop` |
 | Build and open the app | `./scripts/make_app.sh && open -n ./Rocky.app` |
 | Run from source (no camera permission) | `./venv/bin/python rocky_desktop_app.py` |
 | Start with watch mode / without hands-free | `--watch` / `--push-to-talk` |

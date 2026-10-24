@@ -6,7 +6,7 @@
 > context only. Measured numbers in [`docs/LATENCY.md`](docs/LATENCY.md) are the
 > source of truth.
 
-Last updated: 2026-10-22
+Last updated: 2026-10-23
 Repository: <https://github.com/dgooding/rocky>
 Branch: `main`
 
@@ -14,13 +14,15 @@ Branch: `main`
 
 ## 1. Mission
 
-Make Rocky a convincing **real-time** desk companion: the on-screen version of
-Casey Grothaus's [desk robot](https://github.com/cgro00/desk-robot)
-([video](https://www.youtube.com/shorts/aHSusA0xXjU)), whose eye presets this
-app already uses. Say "hey Rocky" and he looks at you and answers in character.
-When in doubt about behaviour, match that robot.
+Make Rocky a convincing **real-time** local desktop assistant with animated
+eyes inspired by Casey Grothaus's
+[desk robot](https://github.com/cgro00/desk-robot). The owner chose a natural,
+conversational assistant personality and local British-English speech instead
+of roleplaying the fictional character or using its cloned voice.
+Earlier voice-engine plans in this handoff are historical; hosted speech or
+voice-clone work requires a new explicit owner decision.
 
-- local voice clone (Rocky)
+- local British-English TTS (Kokoro `bf_emma` by default)
 - local brain (Ollama)
 - two senses in this app: **hearing** (hands-free voice recognition) and
   **sight** (webcam)
@@ -45,7 +47,8 @@ downloads them.
 - faster-whisper transcription (~0.4 s after you stop talking)
 - Ollama brain streaming (`qwen3-coder:latest`, `num_ctx=8192`)
 - Sentence/clause splitting and TTS prefetch
-- XTTS v2 voice clone via persistent server on `127.0.0.1:59720`
+- Kokoro local British voice (`bf_emma`), cached after first use; macOS `say`
+  is an alternate local voice
 - pygame UI, subtitles, typed input, 7 emotion presets, doze when ignored
 - Sight: "what do you see?" / "what am I holding?" / "look left" / F3 →
   `qwen2.5vl:3b`; opt-in watch mode ("track me", F5) with local face detection
@@ -61,15 +64,47 @@ The hearing and sight changes were tested with synthetic audio, fake camera
 frames, and a fake brain (22 checks), not with a real microphone, webcam, or
 Ollama. Run the checks in `AGENTS.md` first.
 
+**Verification update (2026-10-23):** `./setup.sh` completed and
+`rocky_desktop_app.py --selftest` passed with local Ollama. Output included
+`hearing endpointer`, `configurable endpoint pause`, `hearing ignores a click`,
+`sight look-intent`, `hearing commands (wake/sleep/track)`, `response
+cancellation`, `PCM playback chunks`, `sight face detector`, and a synthetic
+vision result ("The main object is a red square."). No STT probe WAV was
+present. A coordinated 8 s microphone capture was transcribed locally by
+faster-whisper as "Hey Rocky, testing the microphone. Frienda. Hello friend."
+The requested phrase was recognized, with extra trailing words; this confirms
+mic capture and local STT but not hands-free wake/response behavior. A brief
+low-level tone and then a moderate-level tone completed through the new
+`sounddevice.OutputStream` path on the MacBook Pro Speakers without an
+audio-device error; the user confirmed the moderate tone was clearly audible.
+Webcam permissions/vision, hands-free wake and response behavior, and the
+hands-free speaker self-echo check still need the user-run checks below.
+
+**Voice update (2026-10-23):** after rejecting the robotic sound of installed
+macOS voices, the owner selected a local open-source British TTS. The app now
+defaults to Kokoro `bf_emma` and a natural, non-character assistant prompt.
+Kokoro generated a valid 24 kHz WAV and played through the app's PCM path; the
+owner said it was closer. It is not claimed to match ElevenLabs. Kokoro weights
+are Apache-licensed; model card grades voice data quality subjectively and
+warns short utterances can be weaker. A local smoke timing took 3.41 s for the
+first phrase in a process and 0.30 s for the next phrase; this is not a
+statistically meaningful benchmark.
+
 ### Missing / known weak points
 
-- **No barge-in** — he cannot be interrupted while speaking
+- **No automatic voice barge-in** — F1 can stop playback and start push-to-talk;
+  hands-free interruption still waits for echo cancellation
 - **No AEC** — so hands-free listening pauses while he speaks
-- **No streaming playback** — `pygame.mixer` plays a complete WAV
-- **XTTS is too slow** — measured **2.4–3.8 s per clause**
+- **TTS is not streamed** — Kokoro synthesizes the clause before the app plays
+  its 20 ms PCM blocks
+- **Kokoro latency is not yet measured** — first model load/synthesis took
+  ~10.8 s including initial model/dependency setup; warm performance needs a
+  separate benchmark
+- Legacy XTTS measurements remain in `docs/LATENCY.md`; XTTS is not the app's
+  active voice path
 - **`inference_stream` is broken** with `transformers==4.44.0` / `torch==2.5.1`
-- **Endpointing is a fixed 700 ms pause** — the desk robot uses Silero VAD +
-  Smart Turn, which is the natural next upgrade
+- **Endpointing is energy-based** — the quiet pause is configurable (200–2000
+  ms, 700 ms default); Silero VAD + Smart Turn remains the natural next upgrade
 - **CI workflow not pushed** — token lacked `workflow` scope; exact YAML is in
   [`docs/CI.md`](docs/CI.md)
 
@@ -77,7 +112,9 @@ Ollama. Run the checks in `AGENTS.md` first.
 
 | Stage | Measured |
 |---|---:|
-| XTTS per clause | 2.4–3.8 s |
+| Kokoro first phrase in process | 3.41 s (single smoke check) |
+| Kokoro next phrase in same process | 0.30 s (single smoke check) |
+| Legacy XTTS per clause | 2.4–3.8 s |
 | End-to-end first sound | ~3–5 s |
 | Brain first token (warm) | 0.07–0.15 s |
 | faster-whisper | ~0.4 s |
@@ -137,7 +174,7 @@ Read order for a new agent:
 
 ### Phase 0 — Instrument and decide (0.5–1 day)
 
-**Goal:** stop guessing; choose the primary real-time engine.
+**Goal:** measure the local pipeline and improve its real-time behavior.
 
 Tasks:
 
@@ -150,16 +187,14 @@ Tasks:
 - [ ] Write one JSONL trace per turn; compute p50/p95 over 20 turns.
 - [ ] Keep `qwen3-coder` and `qwen2.5vl` resident; verify with
   `curl -s http://127.0.0.1:11434/api/ps`.
-- [ ] Re-run the XTTS baseline using `docs/LATENCY.md`.
-- [ ] Confirm voice-clone consent and a monthly cloud budget cap.
-- [ ] Run a one-day A/B:
-  - OpenAI Realtime (`gpt-realtime`, custom voice, semantic VAD)
-  - Pipecat cascade: Deepgram Nova-3 or Cartesia Ink 2 → local `qwen3-coder`
-    → Cartesia Sonic 3.6 or ElevenLabs Flash v2.5
+- [ ] Benchmark warm synthesis for local Kokoro.
+- [ ] Compare British Kokoro presets with the user.
 
-Run the provider A/B after the hearing/sight check on the Mac.
+Run voice checks locally; do not route voice or other data to a cloud service
+without explicit user opt-in.
 
-**Exit:** measured baseline; primary engine chosen; fallback chosen.
+**Exit:** local pipeline baseline measured; Kokoro default and macOS fallback
+characterized.
 
 **Files likely touched:** `rocky_desktop_app.py`, new `rocky_metrics.py`,
 `docs/LATENCY.md`.
@@ -174,14 +209,15 @@ Tasks:
 
 - [x] Continuous 16 kHz mono capture with 20 ms frames (`Ears`, hands-free).
 - [ ] Silero VAD + Smart Turn v3 or provider endpointing (200–300 ms). Today:
-  adaptive energy endpointing with a 700 ms pause (`Endpointer`).
-- [ ] Replace `pygame.mixer` with `sounddevice.RawOutputStream` or PyAudio and a
-  PCM ring buffer.
+  adaptive energy endpointing with a configurable pause (`Endpointer`,
+  `--end-silence-ms`, default 700).
+- [ ] Keep one persistent PCM output stream and add a bounded ring buffer;
+  current `sounddevice.OutputStream` streams 20 ms blocks per synthesized clip.
 - [ ] Cancelable TTS/LLM tasks; flush the ring buffer on interrupt.
 - [ ] Barge-in state machine: `LISTENING → THINKING → SPEAKING → INTERRUPTED`.
 - [ ] macOS AEC via `AVAudioEngine.inputNode.setVoiceProcessingEnabled(true)`
   (Swift helper or PyObjC); headphones as the temporary fallback.
-- [ ] Pre-generate 5–10 backchannels in Rocky's voice ("Mm", "Yes", "Okay").
+- [ ] Pre-generate 5–10 neutral assistant backchannels locally.
 - [ ] Keep eyes/amplitude in sync from the same PCM chunks.
 
 **Exit:** p95 speech-end → first audio <800 ms; barge-in stop <150 ms; no
@@ -194,19 +230,15 @@ self-hearing with speakers at normal volume.
 
 ### Phase 2 — Voice engine (2–3 days)
 
-**Goal:** make the chosen engine the primary voice, with a fallback.
+**Goal:** improve local Kokoro responsiveness and retain a local fallback.
 
 Tasks:
 
-- [ ] Define a `RealtimeSession` interface: audio in/out, cancel, events.
-- [ ] Implement the primary engine (OpenAI Realtime or Pipecat cascade).
-- [ ] Implement the fallback engine.
+- [ ] Optimize and benchmark Kokoro synthesis for the default British preset.
+- [ ] Keep the macOS system voice available as a local fallback.
 - [ ] Tune first-clause length and TTS continuations.
-- [ ] Blind similarity test against the XTTS reference (10–20 phrases).
-- [ ] Measure cost per 100 turns.
-- [ ] Add a voice-consent note to the UI/docs.
 
-**Exit:** primary voice accepted; fallback works; cost understood.
+**Exit:** local voice is accepted; fallback works; warm latency is measured.
 
 **Files likely touched:** new `rocky_realtime.py`, `rocky_desktop_app.py`,
 `requirements.txt`, `docs/REALTIME_PLAN.md`.
@@ -274,8 +306,8 @@ audio path.
 | Decision | Options | Default recommendation |
 |---|---|---|
 | Cloud or local-first? | cloud latency vs privacy | Local by default; cloud as opt-in |
-| Primary engine | OpenAI Realtime vs Pipecat cascade | Run both for one day; pick on p95 + voice quality |
-| Voice | OpenAI custom voice vs Cartesia/ElevenLabs clone | Cascade if Rocky's voice matters most |
+| Primary engine | local Kokoro, with local macOS fallback | **Chosen:** local-only by default |
+| Voice | Kokoro British preset vs installed macOS voice | **Chosen:** Kokoro `bf_emma`; no cloned character voice |
 | Listening mode | always-on vs wake word vs push-to-talk | **Chosen:** "hey Rocky" + push-to-talk; mic paused while he speaks until AEC exists |
 | Vision | local VLM vs realtime session | **Chosen:** local face detector (opt-in) + on-demand VLM |
 | Budget | per-minute cloud audio | Set a hard monthly cap before Phase 2 |
