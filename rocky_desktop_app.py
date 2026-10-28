@@ -78,7 +78,7 @@ WARN = (240, 150, 150)
 REC = (255, 90, 90)
 FPS = 60
 FONT_NAME = "menlo,monospace"
-HINT = "F1 talk/interrupt  F2 talk  F3 look  F4 hands-free  F5 watch  Esc quit"
+HINT = "F1 hold-talk  F2 talk  F3 look  F4 hands-free  F5 watch  Esc"
 
 LISTENING, THINKING, SPEAKING, IDLE = "LISTENING", "THINKING", "SPEAKING", "IDLE"
 LABELS = {LISTENING: "listening...", THINKING: "thinking...", SPEAKING: "speaking"}
@@ -207,6 +207,8 @@ class Mic:
 
     def start(self) -> bool:
         import sounddevice as sd
+        if self.stream is not None:      # a second F1 must not leave a stream open
+            self.stop()
         self.frames, self.error = [], ""
         try:
             self.stream = sd.InputStream(samplerate=self.RATE, channels=1,
@@ -986,7 +988,10 @@ def worker(transcriber: Transcriber, brain: Brain, camera, watcher=None) -> None
                     eyes_emotion = "happy"
                 continue
 
-            if job.get("audio") is not None:
+            if "audio" in job:
+                if job["audio"] is None:     # F2 pressed and released with no sound
+                    note, state = "didn't catch that", IDLE
+                    continue
                 state, eyes_emotion = THINKING, "thinking"
                 heard = transcriber.transcribe(job["audio"])
                 if job.get("hands_free"):
@@ -1042,7 +1047,7 @@ def worker(transcriber: Transcriber, brain: Brain, camera, watcher=None) -> None
                     gaze_override = (LOOK_DIRECTIONS[direction.group(1).lower()],
                                      time.monotonic() + 4.0)
                 print(f"[you] {text} (looking)", file=sys.stderr)
-                look(camera, brain, text)
+                look(camera, brain, text, cancel_event=response_cancel)
                 stay_awake()
                 continue
 

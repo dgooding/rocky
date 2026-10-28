@@ -6,7 +6,7 @@
 > context only. Measured numbers in [`docs/LATENCY.md`](docs/LATENCY.md) are the
 > source of truth.
 
-Last updated: 2026-10-23
+Last updated: 2026-10-27
 Repository: <https://github.com/dgooding/rocky>
 Branch: `main`
 
@@ -58,7 +58,7 @@ downloads them.
 - `scripts/fetch_assets.sh` downloads voice files and models for a fresh clone
 - Public repo with docs, screenshots, setup, restore scripts, issue templates
 
-### Not yet verified on a Mac
+### Verification log
 
 The hearing and sight changes were tested with synthetic audio, fake camera
 frames, and a fake brain (22 checks), not with a real microphone, webcam, or
@@ -123,16 +123,28 @@ warns short utterances can be weaker. A local smoke timing took 3.41 s for the
 first phrase in a process and 0.30 s for the next phrase; this is not a
 statistically meaningful benchmark.
 
+**Verification update (2026-10-27):** the working copy was stuck in a failed
+`git rebase` with a committed 73 MB archive and unmerged `.gitignore`; it was
+reset to `origin/main` and those files removed (backup bundle and the stale
+branch are in `~/Documents/Rocky-backups/`, tag `archive/submodule-flatten-2026-10-23`).
+On a fresh `venv` from `requirements.txt`, `--selftest` passed every check
+(hearing endpointer, configurable endpoint pause, ignores a click, look-intent,
+wake/sleep/track, response length, cancellation, PCM chunks, face detector) and
+the synthetic vision probe answered in 6.1 s (cold model). Kokoro `bf_emma`
+synthesized "What time is it?" in 0.25 s and a ten-word sentence in 0.40 s once
+warm; the first call in a fresh venv took 11.2 s because Kokoro installs
+`en_core_web_sm` and downloads its weights once. Real microphone, webcam, and
+wake-word behaviour are still unverified by a person.
+
 ### Missing / known weak points
 
 - **No automatic voice barge-in** — F1 can stop playback and start push-to-talk;
   hands-free interruption still waits for echo cancellation
 - **No AEC** — so hands-free listening pauses while he speaks
+- **Kokoro's first call is slow once** — a fresh venv installs `en_core_web_sm`
+  and downloads the 82M weights (~11 s); later calls are 0.25–0.40 s
 - **TTS is not streamed** — Kokoro synthesizes the clause before the app plays
   its 20 ms PCM blocks
-- **Kokoro latency is not yet measured** — first model load/synthesis took
-  ~10.8 s including initial model/dependency setup; warm performance needs a
-  separate benchmark
 - Legacy XTTS measurements remain in `docs/LATENCY.md`; XTTS is not the app's
   active voice path
 - **`inference_stream` is broken** with `transformers==4.44.0` / `torch==2.5.1`
@@ -145,10 +157,10 @@ statistically meaningful benchmark.
 
 | Stage | Measured |
 |---|---:|
-| Kokoro first phrase in process | 3.41 s (single smoke check) |
-| Kokoro next phrase in same process | 0.30 s (single smoke check) |
+| Kokoro per clause (warm) | 0.25–0.40 s (2 checks, 2026-10-27) |
+| Kokoro first call in a fresh venv | 11.2 s (one-time model + G2P install) |
 | Legacy XTTS per clause | 2.4–3.8 s |
-| End-to-end first sound | ~3–5 s |
+| End-to-end first sound | not measured with Kokoro; the parts add up to ~0.8 s warm |
 | Brain first token (warm) | 0.07–0.15 s |
 | faster-whisper | ~0.4 s |
 | Vision warm | ~0.4 s; ~6 s after model swap |
@@ -364,7 +376,7 @@ python3.11 -m compileall -q rocky_desktop_app.py rocky_eyes.py rocky_say.py app.
 # App pipeline (synthetic vision, no camera)
 ./venv/bin/python rocky_desktop_app.py --selftest
 
-# Voice server
+# Legacy voice server (only the standalone rocky_say.py tool uses it)
 curl -s http://127.0.0.1:59720/health
 
 # Camera through the bundle
@@ -412,8 +424,8 @@ Acceptance for the redesign:
 
 Rocky is "done" for this phase when:
 
-- A new user can clone the repo, restore assets, run `./setup.sh`, pull models,
-  start the voice server, and launch the app from the README.
+- A new user can clone the repo, run `./setup.sh`, pull the Ollama models, and
+  launch the app from the README (Kokoro needs no voice server or voice assets).
 - The app starts speaking in under 800 ms p95 after the user stops talking.
 - The user can interrupt mid-sentence and Rocky stops immediately.
 - The camera is useful without a 6 s model swap and without a VLM on every

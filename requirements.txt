@@ -16,6 +16,8 @@ faster-whisper==1.2.1
 
 # Local British-English text-to-speech
 kokoro==0.9.4
+# Kokoro's G2P otherwise pip-installs this on first use, mid-conversation
+en-core-web-sm==3.8.0
 
 # Audio I/O and playback
 sounddevice==0.5.6

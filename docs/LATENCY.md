@@ -13,8 +13,10 @@ decisions.
 
 These XTTS timings are a historical baseline for the legacy standalone tool,
 not the desktop app's current Kokoro voice path. Kokoro's first use took about
-10.8 s including dependency/model setup. In a later single local smoke check,
-the first phrase in a process took 3.41 s and the next phrase took 0.30 s.
+10.8 s including dependency/model setup. A 2026-10-27 check on a fresh venv from
+`requirements.txt` measured 11.2 s for the very first call (one-time
+`en_core_web_sm` install plus weight download), then 0.25 s for
+`"What time is it?"` and 0.40 s for a ten-word sentence in the same process.
 These are individual timings, not a statistically meaningful benchmark.
 The XTTS timing below predates the PCM playback change and is unchanged by it:
 XTTS still generates a complete WAV before playback. Playback now writes 20 ms
@@ -24,8 +26,8 @@ blocks to the output device, but its device latency has not yet been measured.
 
 | Stage | Measured | Notes |
 |---|---:|---|
-| Kokoro first phrase in process | 3.41 s | Single smoke check; loaded model cache |
-| Kokoro next phrase, same process | 0.30 s | Single smoke check; not p50/p95 |
+| Kokoro first call in a fresh venv | 11.2 s | One-time model + G2P install, 2026-10-27 |
+| Kokoro per clause, warm | 0.25–0.40 s | Two checks, 2026-10-27; not p50/p95 |
 | XTTS server cold load | ~22 s | Weights already downloaded |
 | XTTS `"Hi."` | 3.77 s | 2.37 s of audio |
 | XTTS `"Hello friend."` | 2.77 s | 1.72 s of audio |
@@ -35,9 +37,10 @@ blocks to the output device, but its device latency has not yet been measured.
 | `qwen3-coder` full reply | ~0.22 s | Historical 45-token cap; now 48 simple / 220 detailed |
 | faster-whisper `base.en` | ~0.4 s | After key release |
 | `qwen2.5vl:3b` vision | ~0.4 s warm / ~6 s after swap | Ollama |
-| End-to-end first sound | ~3–5 s | Dominated by XTTS |
+| End-to-end first sound | not measured with Kokoro | Parts suggest ~0.8 s warm |
 
-The brain is not the bottleneck. XTTS is.
+The brain is not the bottleneck. Warm Kokoro clauses cost 0.25–0.40 s, so the
+first-sound budget is model load plus one clause, not synthesis throughput.
 
 ## Reproduce the TTS numbers
 

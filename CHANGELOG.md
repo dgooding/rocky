@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026-10-27
+
+- **Repo repair:** a failed `git rebase` had left the working copy detached with
+  an unmerged `.gitignore`, a committed 73 MB archive, a `Users/aiserver/...`
+  tree, and two duplicate checkouts of the project. Reset to `origin/main`;
+  the stale branch is kept behind tag `archive/submodule-flatten-2026-10-23`
+  and a bundle in `~/Documents/Rocky-backups/`.
+- Fixed: releasing F2 without speaking showed `error: 'text'` instead of
+  "didn't catch that" (`{"audio": None}` job).
+- Fixed: pressing F1 while already recording opened a second microphone stream
+  and leaked the first.
+- Fixed: a spoken camera answer could not be interrupted with F1.
+- Fixed: the idle hint line was wider than the window, so `Esc quit` was clipped.
+- Pinned `en-core-web-sm` so the first Kokoro call no longer pip-installs it
+  mid-conversation; measured Kokoro per-clause synthesis at 0.25–0.40 s warm.
+
 ## 2026-10-22 (later)
 
 - **Hearing:** hands-free listening (`Ears` + `Endpointer`): continuous 20 ms
