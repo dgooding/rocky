@@ -69,14 +69,18 @@ except ImportError:
     sys.exit("Run this inside your rocky-tts folder, next to rocky_say.py")
 
 # --- look ---------------------------------------------------------------
-W, H = 520, 300
-BG = (8, 9, 14)
-EYE = (247, 249, 252)
-DIM = (104, 112, 126)
-INK = (225, 230, 238)
-WARN = (240, 150, 150)
-REC = (255, 90, 90)
-FPS = 60
+W, H = 640, 400
+BG     = (5, 8, 14)      # Jarvis theme background
+PANEL  = (16, 22, 32)     # Updated color: Panel areas  
+LINE   = (38, 54, 74)     # Updated color: Lines and borders
+EYE    = (230, 240, 250)  # Updated color: Eyes and glows
+DIM    = (126, 146, 176)  # Updated color: Dim text and indicators
+INK    = (238, 246, 255)  # Updated color: Main text
+WARN   = (255, 190, 100)  # Updated color: Warnings and alerts  
+REC    = (255, 100, 100)  # Updated color: Recording indicator
+ACCENT = (70, 230, 255)   # Updated color: Accent highlights
+OK     = (120, 245, 180)  # Updated color: Status indicators
+FPS    = 60
 FONT_NAME = "menlo,monospace"
 HINT = "F1 hold-talk  F2 talk  F3 look  F4 hands-free  F5 watch  Esc"
 
@@ -1070,35 +1074,322 @@ def worker(transcriber: Transcriber, brain: Brain, camera, watcher=None) -> None
 
 
 # --- drawing ------------------------------------------------------------
+# --- drawing ------------------------------------------------------------
+chrome_cache = {}  # keyed by (W, H) to avoid recreating it every frame
+
 def render(screen, font, small, t, st, said, msg, typed, recording, eyes,
            ears_on=False, watching=False, awake=False):
-    screen.fill(BG)
+    global chrome_cache
+    
+    # Build or retrieve static chrome
+    chrome_key = (W, H)
+    if chrome_key not in chrome_cache:
+        chrome = pygame.Surface((W, H), pygame.SRCALPHA)
+        chrome.fill(BG)
+        
+        # Draw 20 px dot grid in LINE at ~40% brightness 
+        for y in range(0, H, 20):
+            for x in range(0, W, 20):
+                pygame.draw.circle(chrome, LINE, (x + 10, y + 10), 1)
+        
+        # Draw 1 px inset border rect
+        border_rect = pygame.Rect(8, 8, W - 16, H - 16)
+        pygame.draw.rect(chrome, LINE, border_rect, 1)
+        
+        # Draw 18 px corner brackets in ACCENT at all four corners (2 px thick L shapes)
+        # Top-left bracket
+        pygame.draw.line(chrome, ACCENT, (8, 8), (26, 8), 2)
+        pygame.draw.line(chrome, ACCENT, (8, 8), (8, 26), 2)
+        
+        # Top-right bracket  
+        pygame.draw.line(chrome, ACCENT, (W-8, 8), (W-26, 8), 2)
+        pygame.draw.line(chrome, ACCENT, (W-8, 8), (W-8, 26), 2)
+        
+        # Bottom-left bracket
+        pygame.draw.line(chrome, ACCENT, (8, H-8), (26, H-8), 2)
+        pygame.draw.line(chrome, ACCENT, (8, H-8), (8, H-26), 2)
+        
+        # Bottom-right bracket
+        pygame.draw.line(chrome, ACCENT, (W-8, H-8), (W-26, H-8), 2)
+        pygame.draw.line(chrome, ACCENT, (W-8, H-8), (W-8, H-26), 2)
+        
+        chrome_cache[chrome_key] = chrome
+    
+    # Blit the static chrome
+    screen.blit(chrome_cache[chrome_key], (0, 0))
+    
+    # Draw eyes in the center
     eyes.draw(screen, t, glow=0.5 + amplitude * 0.9)
-
-    if st in LABELS:
-        screen.blit(small.render(LABELS[st], True, DIM), (16, 16))
-    if said:
-        line = said if len(said) < 58 else said[:55] + "..."
-        screen.blit(font.render(line, True, EYE), (16, H - 74))
-    if msg:
-        screen.blit(small.render(msg[:68], True, WARN), (16, H - 46))
-    elif st == IDLE and not said:
-        screen.blit(small.render(HINT, True, DIM), (16, H - 46))
-
-    # which senses are on: always visible, so the mic and camera are never hidden
-    hearing = ("awake" if awake else 'say "hey Rocky"') if ears_on else ""
-    senses = "  ".join(s for s in (hearing, "watching" if watching else "") if s)
-    if senses:
-        label = small.render(senses, True, DIM)
-        screen.blit(label, (W - 40 - label.get_width(), 15))
-
-    # recording dot
+    
+    # Header
+    header_y = 14
+    
+    # Rockey logo
+    font_large = pygame.font.SysFont(FONT_NAME, 18)
+    rocky_text = font_large.render("ROCKY", True, ACCENT)
+    screen.blit(rocky_text, ((W - rocky_text.get_width()) // 2, header_y))
+    
+    # Separator dot
+    sep_dot = pygame.Surface((6, 6), pygame.SRCALPHA)
+    pygame.draw.circle(sep_dot, LINE, (3, 3), 3)
+    screen.blit(sep_dot, ((W - rocky_text.get_width()) // 2 + rocky_text.get_width() + 8, header_y + 7))
+    
+    # Mic state  
+    mic_x = (W - rocky_text.get_width()) // 2 + rocky_text.get_width() + 24
+    if ears_on:
+        mic_dot = pygame.Surface((6, 6), pygame.SRCALPHA)
+        pygame.draw.circle(mic_dot, OK, (3, 3), 3)  
+        screen.blit(mic_dot, (mic_x, header_y + 7))
+        mic_text = small.render("MIC ON", True, OK)
+    else:
+        mic_dot = pygame.Surface((6, 6), pygame.SRCALPHA)
+        pygame.draw.circle(mic_dot, DIM, (3, 3), 3)  
+        screen.blit(mic_dot, (mic_x, header_y + 7))
+        mic_text = small.render("MIC OFF", True, DIM)
+    screen.blit(mic_text, (mic_x + 12, header_y))
+    
+    # Camera state  
+    cam_x = mic_x + mic_text.get_width() + 36
+    if watching:
+        cam_dot = pygame.Surface((6, 6), pygame.SRCALPHA)
+        pygame.draw.circle(cam_dot, WARN, (3, 3), 3)  
+        screen.blit(cam_dot, (cam_x, header_y + 7))
+        cam_text = small.render("CAM ON", True, WARN)
+    else:
+        cam_dot = pygame.Surface((6, 6), pygame.SRCALPHA)
+        pygame.draw.circle(cam_dot, DIM, (3, 3), 3)  
+        screen.blit(cam_dot, (cam_x, header_y + 7))
+        cam_text = small.render("CAM OFF", True, DIM)
+    screen.blit(cam_text, (cam_x + 12, header_y))
+    
+    # State chip (on right)
+    chip_width = 120
+    chip_height = 26 
+    chip_x = W - chip_width - 16
+    chip_y = header_y
+    
+    state_colors = {
+        IDLE: DIM,
+        LISTENING: OK,
+        THINKING: ACCENT,
+        SPEAKING: (255, 206, 120)  # Warm speaking color as specified
+    }
+    
+    # Draw chip background with 12% alpha fill
+    state_color = state_colors.get(st, DIM)
+    pygame.draw.rect(screen, (*state_color[:3], int(0.12 * 255)), 
+                     (chip_x, chip_y, chip_width, chip_height), border_radius=6, 
+                     width=0)  # fill with alpha
+    
+    # Draw border
+    pygame.draw.rect(screen, LINE, (chip_x, chip_y, chip_width, chip_height), 
+                     border_radius=6, width=1)
+    
+    # State name text  
+    state_text = small.render(st, True, state_color)
+    screen.blit(state_text, (chip_x + 12, chip_y + 4))
+    
+    # Awake/Asleep indicator 
+    awake_text = small.render("AWAKE" if awake else "ASLEEP", True, OK if awake else DIM)
+    screen.blit(awake_text, (chip_x + state_text.get_width() + 18, chip_y + 4))
+    
+    # Time text
+    time_text = small.render(time.strftime("%H:%M:%S"), True, DIM)
+    screen.blit(time_text, (chip_x + state_text.get_width() + awake_text.get_width() + 36, chip_y + 4))
+    
+    # Assistant core area with eyes at center of screen at (W//2, 200) 
+    eye_center = (W // 2, 200)
+    
+    # Draw full circle around the eyes at radius 108 in LINE
+    pygame.draw.circle(screen, LINE, eye_center, 108, 1)
+      
+    # Draw 24 tick marks on radius 118  
+    for i in range(24):
+        angle = (i * 360) / 24  # degrees
+        radians = math.radians(angle)
+        x1 = eye_center[0] + math.cos(radians) * 118
+        y1 = eye_center[1] + math.sin(radians) * 118
+        if i % 4 == 0:
+            length = 8  # Longer ticks every 4th
+        else:
+            length = 4  # Shorter ticks  
+        x2 = eye_center[0] + math.cos(radians) * (118 + length)
+        y2 = eye_center[1] + math.sin(radians) * (118 + length)
+        pygame.draw.line(screen, LINE, (x1, y1), (x2, y2), 1)
+        
+    # Draw the state arc
+    arc_radius = 108
+    arc_width = 2
+    rect = pygame.Rect(eye_center[0] - arc_radius, eye_center[1] - arc_radius,
+                       arc_radius * 2, arc_radius * 2)
+    
+    if st == LISTENING:
+        # Breathing 90° arc in OK (length modulated by sin(t*2)) 
+        arc_length = 90 + 45 * math.sin(t * 2)
+        start_angle = -45
+        end_angle = start_angle + arc_length
+    elif st == THINKING:
+        # 120° rotating arc in ACCENT 
+        start_angle = t * 180 % 360  
+        end_angle = start_angle + 120
+    elif st == SPEAKING:
+        # Arc from 0° to (90 + 180*amplitude)° in warm color
+        start_angle = 0 
+        end_angle = 90 + 180 * amplitude
+    else:  # IDLE
+        # Static 90° arc in DIM  
+        start_angle = -45
+        end_angle = 45
+        
+    if st == LISTENING or st == THINKING or st == SPEAKING:
+        # Highlight ticks inside active arc with ACCENT color
+        for i in range(24):
+            angle = (i * 360) / 24  # degrees
+            if st == LISTENING or st == SPEAKING:  
+                # Show ACCENT for all ticks when listening/speaking
+                tick_color = ACCENT
+            elif st == THINKING:
+                # Use ACCENT for tick inside the thinking arc and LINE for outside 
+                if start_angle <= angle <= end_angle or (start_angle < 0 and angle >= 360 + start_angle):
+                    tick_color = ACCENT 
+                else:
+                    tick_color = LINE
+            else:
+                tick_color = LINE
+            
+            radians = math.radians(angle)
+            x1 = eye_center[0] + math.cos(radians) * 118
+            y1 = eye_center[1] + math.sin(radians) * 118
+            if i % 4 == 0:
+                length = 8  
+            else:
+                length = 4  
+            x2 = eye_center[0] + math.cos(radians) * (118 + length)
+            y2 = eye_center[1] + math.sin(radians) * (118 + length)
+            pygame.draw.line(screen, tick_color, (x1, y1), (x2, y2), 1)
+    
+    # Draw arc in state color
+    arc_color = state_colors.get(st, DIM) if st != SPEAKING else (255, 206, 120) 
     if recording:
-        pygame.draw.circle(screen, REC, (W - 24, 22), 7)
+        arc_color = REC
+        
+    pygame.draw.arc(screen, arc_color, rect, math.radians(start_angle), 
+                    math.radians(end_angle), arc_width)
+    
+    # Recording indicator  
+    if recording:
+        rec_text = small.render("● REC", True, REC)
+        screen.blit(rec_text, (W - 24 - 50, header_y + 16))
+        
+    # Waveform at y baseline 300, 48 bars, centred, 2px wide with 6px pitch
+    waveform_y = 300
+    bar_count = 48
+    total_width = bar_count * 2 + (bar_count - 1) * 6
+    start_x = (W - total_width) // 2
+    if amplitude < 0.02:  
+        # Hairline at the center  
+        pygame.draw.line(screen, LINE, (start_x, waveform_y), (start_x + total_width, waveform_y), 1)
+    else:
+        for i in range(bar_count):
+            wobble = 0.35 + 0.65 * abs(math.sin(t * 6 + i * 0.7))
+            bar_height = 2 + 26 * amplitude * wobble
+            bar_x = start_x + i * (2 + 6)
+            
+            # Draw both top and bottom halves symmetrically
+            pygame.draw.line(screen, ACCENT, (bar_x, waveform_y - bar_height/2), 
+                            (bar_x, waveform_y + bar_height/2), 2)
 
-    pygame.draw.rect(screen, (14, 17, 24), pygame.Rect(0, H - 30, W, 30))
+    # Caption card  
+    caption_rect = pygame.Rect(16, 314, W-32, 48)
+    pygame.draw.rect(screen, PANEL, caption_rect, border_radius=6, width=1) 
+    pygame.draw.line(screen, LINE, (caption_rect.left, caption_rect.top), 
+                    (caption_rect.right, caption_rect.top), 1)
+    pygame.draw.line(screen, LINE, (caption_rect.left, caption_rect.bottom), 
+                    (caption_rect.right, caption_rect.bottom), 1)
+    
+    # Caption text
+    if said:
+        # Measure full text first to determine if we need to ellipsize
+        text_width = font.size(said)[0]
+        if text_width > W - 32 - 20:  # 16 px left/right padding + 4 px margin
+            # Need to truncate  
+            truncated = said
+            while font.size(truncated)[0] > W - 32 - 20 and len(truncated) > 0:
+                truncated = truncated[:-1]
+            if truncated: 
+                if truncated != said:
+                    said_text = truncated + "…"
+                else:
+                    said_text = said
+            else:
+                said_text = ""
+        else:
+            said_text = said
+            
+        screen.blit(font.render(said_text, True, INK), (28, 328))
+    elif st == THINKING:
+        thinking_text = small.render("thinking…", True, ACCENT)
+        screen.blit(thinking_text, (28, 328))
+    elif st == IDLE and not said:
+        hint_text = small.render(HINT, True, DIM)
+        screen.blit(hint_text, (28, 328))
+    
+    # Command bar
+    cmd_x, cmd_y = 16, 368
+    cmd_width, cmd_height = W-32, 24
+    
+    pygame.draw.rect(screen, PANEL, (cmd_x, cmd_y, cmd_width, cmd_height), border_radius=4, width=1)
+    
+    # Set command bar color based on recording or typing state
+    if not recording and typed:
+        bar_color = ACCENT 
+    else:
+        bar_color = LINE
+    
+    pygame.draw.rect(screen, (*bar_color[:3], 255), (cmd_x + 4, cmd_y + 1, cmd_width - 8, cmd_height - 2), border_radius=3)
+        
+    # Text in command bar  
     caret = "_" if int(t * 2) % 2 else " "
-    screen.blit(font.render(("> " + typed)[-64:] + caret, True, INK), (16, H - 25))
+    full_text = "> " + typed
+    displayed_text = full_text
+    
+    # Check if the command text is too long to fit 
+    text_width = small.size(displayed_text)[0] + 10  # add spacing
+    if text_width > cmd_width - 28:  # leave about 16 px padding + 12 for caret
+        # Find longest substring that fits
+        max_chars = len(displayed_text)
+        while max_chars > 0:
+            test_str = displayed_text[:max_chars]
+            if small.size(test_str)[0] <= cmd_width - 28:
+                displayed_text = test_str 
+                break
+            max_chars -= 1
+            
+        if max_chars == 0:
+            displayed_text = ""
+    
+    # Draw command prompt or empty text  
+    if typed:
+        screen.blit(small.render(displayed_text, True, INK), (28, 374))
+    else: 
+        hint = small.render("type a message or hold F1", True, DIM)
+        screen.blit(hint, (28, 374))
+        
+    # Draw caret if typed
+    if typed:
+        caret_x = 28 + small.size(displayed_text)[0]
+        screen.blit(small.render(caret, True, INK), (caret_x, 374)) 
+    
+    # Msg (errors/notes) - right aligned, then left aligned when needed to fit
+    if msg and len(msg) > 0:
+        label = small.render(msg[:68], True, WARN)
+        # Check if it fits on the right side of caption card
+        right_aligned_x = W - 16 - label.get_width() 
+        if right_aligned_x > (28 + label.get_width()):  # Has room to be right-aligned  
+            screen.blit(label, (right_aligned_x, 328))  
+        else:  # Place on left side of command bar
+            screen.blit(label, (28, 368 + 12))  # Place under the command bar
+            
     pygame.display.flip()
 
 
@@ -1298,7 +1589,7 @@ def selftest(no_brain: bool) -> int:
                                 (THINKING, "thinking", 0.0, "thinking"), (SPEAKING, "happy", 0.7, "speaking")):
         eyes.set_emotion(emo)
         eyes.p = dict(rocky_eyes.PRESETS[emo])
-        render(screen, font, small, 0.5, st, "Hello friend! I happy happy happy to meet you." if st == SPEAKING else "",
+        render(screen, font, small, 0.5, st, "Hello friend! I happy happy happy to meet you." if st == SPEAKING else "what are you looking at",
                "", "are you okay", st == LISTENING, eyes)
         pygame.image.save(screen, os.path.join(outdir, f"app_{label}.png"))
     pygame.quit()

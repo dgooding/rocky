@@ -20,12 +20,19 @@ import os
 import pygame
 
 # --- palette -----------------------------------------------------------------
-BG = (8, 9, 14)
-EYE = (247, 249, 252)      # white sclera
-PUPIL = (9, 11, 16)        # black pupil
-GLINT = (255, 255, 255)
-BROW = (178, 188, 200)
-DIM = (104, 112, 126)
+BG     = (5, 8, 14)       # Jarvis theme background
+PANEL  = (16, 22, 32)       # Updated panel colors  
+LINE   = (38, 54, 74)       # Updated line/border colors
+EYE    = (230, 240, 250)    # Updated eye colors
+DIM    = (126, 146, 176)    # Updated dim text color
+INK    = (238, 246, 255)    # Updated main text color
+WARN   = (255, 190, 100)    # Updated warning color
+REC    = (255, 100, 100)    # Updated recording indicator
+ACCENT = (70, 230, 255)     # Updated accent color
+OK     = (120, 245, 180)     # Updated status color
+PUPIL  = (5, 10, 20)        # Pupil stays the same
+GLINT  = (255, 255, 255)    # Glint stays the same  
+BROW   = (100, 120, 150)    # Brows stay the same
 
 # Pupil size per emotion: surprise contracts, anger narrows, joy opens up.
 PUPILS = {
