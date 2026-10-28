@@ -65,6 +65,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 try:
     import rocky_say as rocky
     import rocky_eyes
+    from tools import ToolRegistry
 except ImportError:
     sys.exit("Run this inside your rocky-tts folder, next to rocky_say.py")
 
@@ -96,6 +97,8 @@ SYSTEM_PROMPT = (
     "restate the question, narrate your reasoning, or add unsolicited tips or "
     "follow-up offers. Avoid roleplay, catchphrases, and exaggerated emotion. "
     "Do not claim to be human; answer honestly if asked whether you are an AI."
+    "If you need to execute commands or access external tools, use the following format:"
+    "<tool_call name=\"tool_name\" args='{\"arg1\": \"val1\", \"arg2\": \"val2\"}' />"
 )
 
 DETAIL_REQUEST_PATTERN = re.compile(
@@ -578,6 +581,7 @@ class Brain:
         self.checked = None
         self._response_lock = threading.Lock()
         self._active_response = None
+        self.tools = ToolRegistry()
 
     def cancel(self) -> None:
         """Close the active text stream so an interrupted turn can finish."""
@@ -611,13 +615,16 @@ class Brain:
     def _request(self, text: str):
         headers = {"Content-Type": "application/json"}
         token_limit = response_token_limit(text)
+        # Initialize history if not already done
+        if not hasattr(self, 'history'):
+            self.history = [{"role": "system", "content": SYSTEM_PROMPT}]
+        
         if self.api == "openai":
             if self.api_key:
                 headers["Authorization"] = f"Bearer {self.api_key}"
             body = json.dumps({
                 "model": self.model,
-                "messages": [{"role": "system", "content": SYSTEM_PROMPT},
-                             {"role": "user", "content": text}],
+                "messages": self.history + [{"role": "user", "content": text}],
                 "stream": True,
                 "max_tokens": token_limit,
                 "temperature": 0.8,
@@ -626,8 +633,7 @@ class Brain:
                                           headers=headers)
         body = json.dumps({
             "model": self.model,
-            "messages": [{"role": "system", "content": SYSTEM_PROMPT},
-                         {"role": "user", "content": text}],
+            "messages": self.history + [{"role": "user", "content": text}],
             "stream": True,
             "keep_alive": "30m",
             "options": {"num_predict": token_limit, "temperature": 0.8, "top_p": 0.9,
@@ -716,27 +722,88 @@ class Brain:
         """Yield content deltas as they arrive."""
         if (cancel_event is not None and cancel_event.is_set()) or not self.available():
             return
-        response = None
-        try:
-            response = urllib.request.urlopen(self._request(text), timeout=120)
-            with self._response_lock:
-                self._active_response = response
-            if cancel_event is not None and cancel_event.is_set():
-                return
-            for delta in self._deltas(response):
+        
+        # Buffer to handle fragmented tool_call tags
+        unyielded_buffer = ""
+        while True:
+            # Start a new generation with the current history
+            response = None
+            try:
+                response = urllib.request.urlopen(self._request(text), timeout=120)
+                with self._response_lock:
+                    self._active_response = response
                 if cancel_event is not None and cancel_event.is_set():
+                    return
+                
+                match_found = False
+                for delta in self._deltas(response):
+                    if cancel_event is not None and cancel_event.is_set():
+                        break
+                    
+                    token = delta
+                    unyielded_buffer += token
+                    
+                    # Check for complete tool call
+                    import re
+                    import json
+                    match = re.search(r'(<tool_call\s+name="([^"]+)"\s+args=\'(\\{.*?\}|\[.*?\])\'\s*/>)', unyielded_buffer)
+                    if match:
+                        # 1. Yield preceding text
+                        pre_tag_text = unyielded_buffer[:match.start()]
+                        if pre_tag_text:
+                            yield pre_tag_text
+                        
+                        # 2. Execute tool
+                        tool_call_text = match.group(1)
+                        tool_name = match.group(2)
+                        args_str = match.group(3)
+                        try:
+                            args = json.loads(args_str)
+                            # 3. Update history
+                            self.history.append({"role": "assistant", "content": tool_call_text})
+                            result = self.tools.call(tool_name, args)
+                            self.history.append({"role": "user", "content": f"TOOL RESULT: {result.content}"})
+                            
+                            # 4. Prepare for re-generation
+                            unyielded_buffer = unyielded_buffer[match.end():]
+                            match_found = True
+                            break # Restart 'while True'
+                        except Exception as e:
+                            # If tool call is malformed, treat as text or skip
+                            # For now, let's just yield and continue
+                            pass
+
+                    # Handle partial tag buffering
+                    last_open_bracket = unyielded_buffer.rfind('<tool_call')
+                    if last_open_bracket != -1:
+                        # We've encountered a potential tag. Don't yield the part from '<tool_call' onwards.
+                        text_to_yield = unyielded_buffer[:last_open_bracket]
+                        if text_to_yield:
+                            yield text_to_yield
+                        unyielded_buffer = unyielded_buffer[last_open_bracket:]
+                    else:
+                        # No partial tag detected, yield everything
+                        if unyielded_buffer:
+                            yield unyielded_buffer
+                            unyielded_buffer = ""
+                
+                # If generator finishes without a match, check for remaining buffer
+                if not match_found:
+                    if unyielded_buffer:
+                        yield unyielded_buffer
+                        unyielded_buffer = ""
                     break
-                yield delta
-        except (urllib.error.URLError, TimeoutError, ValueError, OSError,
-                http.client.HTTPException) as e:
-            if cancel_event is None or not cancel_event.is_set():
-                print(f"[brain] {e}", file=sys.stderr)
-        finally:
-            with self._response_lock:
-                if self._active_response is response:
-                    self._active_response = None
-            if response is not None:
-                response.close()
+                    
+            except (urllib.error.URLError, TimeoutError, ValueError, OSError,
+                    http.client.HTTPException) as e:
+                if cancel_event is None or not cancel_event.is_set():
+                    print(f"[brain] {e}", file=sys.stderr)
+            finally:
+                with self._response_lock:
+                    if self._active_response is response:
+                        self._active_response = None
+                if response is not None:
+                    response.close()
 
     def vision_stream(self, prompt: str = "Describe the scene.", jpeg: bytes = b""):
         """Stream a description of one camera frame."""
