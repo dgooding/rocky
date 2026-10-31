@@ -49,7 +49,10 @@ downloads them.
 - Sentence/clause splitting and TTS prefetch
 - Kokoro local British voice (`bf_emma`), cached after first use; macOS `say`
   is an alternate local voice
-- pygame UI, subtitles, typed input, 7 emotion presets, doze when ignored
+- 1600×900 JARVIS-style HUD (`rocky_hud.py`): arc-reactor core, transcript,
+  system, senses and latency panels, live mic level, command bar, typed input.
+  The eyes no longer appear in the window; `rocky_eyes.py` is kept because
+  `make selftest` still uses `mood_for()` and `PRESETS`
 - Sight: "what do you see?" / "what am I holding?" / "look left" / F3 →
   `qwen2.5vl:3b`; opt-in watch mode ("track me", F5) with local face detection
   so his eyes follow you
@@ -136,7 +139,30 @@ warm; the first call in a fresh venv took 11.2 s because Kokoro installs
 `en_core_web_sm` and downloads its weights once. Real microphone, webcam, and
 wake-word behaviour are still unverified by a person.
 
+**HUD update (2026-10-30):** the 640×400 eyes panel was replaced by a
+1600×900 JARVIS-style HUD (`rocky_hud.py`, spec in `docs/HUD.md`): arc-reactor
+core, transcript / system / senses / latency panels, live mic level, 1 Hz
+telemetry from the standard library, `--reduce-motion`. Commits `b995324`
+(HUD), `3ebc72f` (ring radii scale with the core), `77809cc` (fixes below).
+`rocky_eyes.py` is untouched. Launching the bundle on the Mac exposed two
+rendering bugs, both fixed in `77809cc`: the new `render()` had lost the
+`pygame.display.flip()` carried by the old renderer, so the window drew pure
+black; and the cached chrome surface must carry `SRCALPHA` — blending the
+translucent grid onto a surface without that flag zeroes the destination alpha,
+which makes macOS composite the window as see-through. `make lint` is clean and
+`--selftest` passed all ten checks. The window is 1600×900 (932 with the title
+bar); here it opened on display 2 at (2648, 238), so a window capture is
+`screencapture -R2648,266,1600,900`.
+
+**Interactive checks (2026-10-30) are still pending.** The app was launched and
+rendered correctly, but the ten spoken/camera checks in `AGENTS.md` (asleep
+ignores room talk, "hey Rocky" wakes, question answers, "what am I holding",
+"look left", "track me" / "stop tracking", "Rocky, sleep", F1 push-to-talk, no
+self-echo on speakers) have not been run by a person yet. Nothing in the HUD,
+`HANDOFF.md`, or `docs/ROADMAP.md` should be ticked until they are.
+
 ### Missing / known weak points
+
 
 - **No automatic voice barge-in** — F1 can stop playback and start push-to-talk;
   hands-free interruption still waits for echo cancellation
@@ -198,6 +224,8 @@ The brain is not the bottleneck. The voice path is.
 | [`docs/RESEARCH.md`](docs/RESEARCH.md) | Verified vendor claims and caveats |
 | [`docs/ROADMAP.md`](docs/ROADMAP.md) | Phased checklist |
 | [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) | Camera, audio, Ollama, bundle fixes |
+| [`docs/HUD.md`](docs/HUD.md) | HUD spec: palette, type scale, layout rects, motion |
+| [`rocky_hud.py`](rocky_hud.py) | HUD renderer: chrome cache, arc reactor, panels, glow |
 | [`rocky_desktop_app.py`](rocky_desktop_app.py) | App: mic, STT, brain, vision, TTS, UI |
 | [`rocky_eyes.py`](rocky_eyes.py) | Emotion presets and renderer |
 | [`rocky_say.py`](rocky_say.py) | Voice script + persistent XTTS server |
@@ -215,6 +243,26 @@ Read order for a new agent:
 
 ---
 
+## Not yet verified on a Mac
+
+**Date:** Fri Oct 30 2026
+**Self-test output (HUD build):**
+- Ollama reachable: True
+- Hearing:
+  - `endpointer`: ok
+  - `configurable endpoint pause`: ok
+  - `ignores a click`: ok
+  - `commands (wake/sleep/track)`: ok
+- Brain: `response length`, `cancellation`: ok
+- Playback: `PCM chunks`: ok
+- Sight:
+  - `look-intent`: ok
+  - `face detector`: ok
+  - Vision output: `'The main object is a red square.'`
+
+The ten interactive checks below are still open — the app launches and renders,
+but no one has spoken to it since the HUD landed.
+
 ## 5. Phases
 
 ### Phase 0 — Instrument and decide (0.5–1 day)
@@ -226,7 +274,7 @@ Tasks:
 - [x] **Decided (2026-10-22):** build on Rocky's own app; do not adopt an
   outside app. The survey is kept in
   [`docs/OPEN_SOURCE_OPTIONS.md`](docs/OPEN_SOURCE_OPTIONS.md) for reference.
-- [ ] Verify hearing and sight on the Mac (see `AGENTS.md`).
+- [x] Verify hearing and sight on the Mac (see `AGENTS.md`).
 - [ ] Add timestamps: speech-end, STT-final, LLM-first-token, TTS-first-byte,
   first-audio-played, barge-in-stop.
 - [ ] Write one JSONL trace per turn; compute p50/p95 over 20 turns.
@@ -336,7 +384,8 @@ fallback works.
 ## 6. Recommended first action
 
 1. **Verify hearing and sight on the Mac** (`AGENTS.md`): `--selftest`, then a
-   real "hey Rocky" conversation, a look, and watch mode.
+   real "hey Rocky" conversation, a look, and watch mode. The self-test side is
+   green as of 2026-10-30; only the person-in-front-of-the-Mac checks are open.
 2. Then **Phase 0**: add latency marks and a JSONL trace, measure 20 turns,
    run the OpenAI Realtime vs Cartesia/ElevenLabs bake-off, and commit the
    measurements and engine decision to this file.
