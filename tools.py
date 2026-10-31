@@ -1,6 +1,10 @@
 from dataclasses import dataclass, field
 from typing import Callable, Dict, Any, Optional
+import html as html_lib
+import re
 import subprocess
+import urllib.parse
+import urllib.request
 
 @dataclass
 class ToolResult:
@@ -23,15 +27,19 @@ class ToolRegistry:
         """Register a tool with the given name, function and metadata."""
         self._tools[name] = (func, metadata)
     
-    def call(self, name: str, args: dict) -> ToolResult:
+    def call(self, name: str, args: dict | None) -> ToolResult:
         """Execute a registered tool with the provided arguments."""
         if name not in self._tools:
             return ToolResult(content=f"Tool '{name}' not found", success=False)
         
         func, _ = self._tools[name]
         try:
+            if not isinstance(args, dict):
+                args = {}
             result = func(**args)
-            return result
+            if isinstance(result, ToolResult):
+                return result
+            return ToolResult(content=str(result), success=True)
         except Exception as e:
             return ToolResult(content=str(e), success=False)
     
@@ -51,20 +59,40 @@ class ToolRegistry:
         return ollama_tools
 
 def open_browser(url: str = "https://www.google.com") -> ToolResult:
-    """Open Chrome or the default browser."""
+    """Open Chrome or the default browser to a URL."""
     try:
-        subprocess.run(["osascript", "-e", 'tell application "Google Chrome" to make new window'], check=True)
-        return ToolResult(content="Opened Chrome browser", success=True)
+        subprocess.run(["open", url], check=True)
+        return ToolResult(content=f"Opened {url}", success=True)
     except Exception as e:
-        try:
-            subprocess.run(["open", url], check=True)
-            return ToolResult(content=f"Opened {url}", success=True)
-        except Exception as e2:
-            return ToolResult(content=f"Failed to open browser: {e2}", success=False)
+        return ToolResult(content=f"Failed to open browser: {e}", success=False)
 
-def search_web(query: str) -> ToolResult:
-    """Search the web for a query (stub implementation)."""
-    return ToolResult(content=f"Search results for {query} (stub)", success=True)
+def search_web(query: str, max_results: int = 3) -> ToolResult:
+    """Search the web via DuckDuckGo Lite without external API keys."""
+    if not query or not query.strip():
+        return ToolResult(content="No search query provided.", success=False)
+    data = urllib.parse.urlencode({"q": query.strip()}).encode()
+    req = urllib.request.Request(
+        "https://lite.duckduckgo.com/lite/",
+        data=data,
+        headers={
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
+            "Content-Type": "application/x-www-form-urlencoded"
+        }
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=6) as resp:
+            body = resp.read().decode("utf-8", errors="ignore")
+            snippets = re.findall(r"class=[\"']result-snippet[\"']>(.*?)</td>", body, re.DOTALL)
+            results = []
+            for s in snippets[:max_results]:
+                text = html_lib.unescape(re.sub(r"<[^>]+>", "", s)).strip()
+                if text:
+                    results.append(text)
+            if not results:
+                return ToolResult(content=f"No results found for '{query}'.", success=True)
+            return ToolResult(content="\n\n".join(results), success=True)
+    except Exception as e:
+        return ToolResult(content=f"Search failed: {e}", success=False)
 
 # Default registry with initial tools
 default_registry = ToolRegistry()

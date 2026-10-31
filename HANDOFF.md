@@ -6,7 +6,7 @@
 > context only. Measured numbers in [`docs/LATENCY.md`](docs/LATENCY.md) are the
 > source of truth.
 
-Last updated: 2026-10-27
+Last updated: 2026-10-30
 Repository: <https://github.com/dgooding/rocky>
 Branch: `main`
 
@@ -49,6 +49,15 @@ downloads them.
 - Sentence/clause splitting and TTS prefetch
 - Kokoro local British voice (`bf_emma`), cached after first use; macOS `say`
   is an alternate local voice
+- Modular brain architecture (`rocky_brain.py`): standalone `Brain`, prompts,
+  sliding-window conversation history (bounded to 20 turns), detail-request
+  token limits, and clause/sentence streaming
+- Extensible Tool Registry (`tools.py`): real live web search via DuckDuckGo
+  Lite (no API keys or external dependencies), system URL opening via native
+  macOS `open`, and automatic tool call execution
+- Dual tool-calling support: streams and intercepts `<tool_call>` tags while
+  normalizing native Ollama / OpenAI `tool_calls` payload schemas into the
+  conversation loop (capped at 3 tool turns to avoid runaway loops)
 - 1600×900 JARVIS-style HUD (`rocky_hud.py`): arc-reactor core, transcript,
   system, senses and latency panels, live mic level, command bar, typed input.
   The eyes no longer appear in the window; `rocky_eyes.py` is kept because
@@ -166,6 +175,32 @@ recorded whether "Not too shabby." was the owner or his own voice reaching the
 microphone. The wake → answer, look, watch-mode, F1 and speaker-echo checks are
 therefore user-reported, not log-verified; the ROADMAP checkbox stays unticked
 until a session with logged replies and a vision use is captured.
+
+**Tool execution, brain modularization & folder consolidation (2026-10-30):**
+Code review uncovered that `Brain` in `rocky_desktop_app.py` was instantiating an
+empty `ToolRegistry()` rather than attaching `default_registry`, while
+`open_browser` used a brittle AppleScript that ignored the target URL.
+Furthermore, tool interception in the streaming loop used an inner `continue`
+that didn't exit the active delta stream to re-query the model with tool
+results, while `import re` and `import json` were firing on every incoming
+token.
+- Connected `default_registry` to `Brain.tools` and upgraded `open_browser` to
+  use native `open <url>`.
+- Replaced the stub `search_web` with live web search via DuckDuckGo Lite,
+  returning top snippets without API keys or external packages.
+- Added native Ollama and OpenAI tool call streaming extraction in `_deltas()`
+  alongside `<tool_call>` tag parsing.
+- Fixed the continuation loop and conversation history: user prompt and tool
+  results are stored in `self.history` with a bounded sliding window (system
+  prompt + last 18 messages).
+- Extracted LLM generation, prompts, token limits, and sentence streaming into
+  `rocky_brain.py`, reducing `rocky_desktop_app.py` by >300 lines.
+- Passed `venv/bin/python rocky_desktop_app.py --selftest` completely.
+- Repositories consolidated: earlier unpushed local commit `cf3fadf` (Drama3
+  worker / voice recovery) was pushed and backed up to GitHub branch
+  `voice-recovery-drama3`. The duplicate folder `~/Documents/Rocky` was backed
+  up to `~/Documents/Rocky-backup-20261030` and replaced with a symlink to
+  `/Users/aiserver/rocky`, preventing future codebase drift.
 
 ### Missing / known weak points
 
