@@ -249,19 +249,19 @@ class HUD:
 
         # outer tick ring
         self._ticks(screen, cx, cy, r, (*colour, 90), count=72, length=5, angle=self._angle)
-        self._ticks(screen, cx, cy, r - 14, (*PANEL_EDGE, 200), count=72, length=3, angle=-self._angle * 0.6)
+        self._ticks(screen, cx, cy, int(r * 0.95), (*PANEL_EDGE, 200), count=72, length=3, angle=-self._angle * 0.6)
 
         # three concentric dashed rings, counter-rotating
-        self._ring(screen, cx, cy, r - 40, 2, colour, self._angle, 12, 0.55)
-        self._ring(screen, cx, cy, r - 78, 6, colour, -self._angle * 1.7, 6, 0.35)
-        self._ring(screen, cx, cy, r - 112, 2, (*colour, 150), self._angle * 2.3, 24, 0.25)
+        self._ring(screen, cx, cy, int(r * 0.85), 2, colour, self._angle, 12, 0.55)
+        self._ring(screen, cx, cy, int(r * 0.71), 6, colour, -self._angle * 1.7, 6, 0.35)
+        self._ring(screen, cx, cy, int(r * 0.58), 2, (*colour, 150), self._angle * 2.3, 24, 0.25)
 
         # progress arc whose sweep is the live energy
         sweep = 40 + 260 * energy
-        self._arc(screen, cx, cy, r - 150, r - 150 + 10, -90, -90 + sweep, colour)
+        self._arc(screen, cx, cy, int(r * 0.44), int(r * 0.44) + 10, -90, -90 + sweep, colour)
 
         # inner aperture
-        inner = max(18, r - 190)
+        inner = max(14, int(r * 0.30))
         pygame.draw.circle(screen, (*color_mix(colour, BG, 0.82), 255), (cx, cy), inner)
         pygame.draw.circle(screen, colour, (cx, cy), inner, 1)
         pygame.draw.circle(screen, colour, (cx, cy), max(3, int(inner * 0.18 + inner * 0.22 * energy)))
