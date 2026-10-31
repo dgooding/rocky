@@ -120,9 +120,9 @@ LOOK_DIRECTIONS = {"left": (7.0, 0.0), "right": (-7.0, 0.0), "up": (0.0, -4.0),
 # (github.com/cgro00/desk-robot): "hey Rocky" wakes him, his name alone does not,
 # and he stays awake for a while after each exchange.
 AWAKE_SECONDS = 60
-WAKE_PATTERN = re.compile(r"\b(hey|hi|hay|okay|ok),?\s+rock(y|ie|ey)\b[\s,.!?]*", re.IGNORECASE)
+WAKE_PATTERN = re.compile(r"\b(hey|hi|hay|okay|ok),?\s+(rock(y|ie|ey)|aura)\b[\s,.!?]*", re.IGNORECASE)
 SLEEP_PATTERN = re.compile(
-    r"^\W*((hey\s+)?rock(y|ie|ey)\W+)?(go to sleep|sleep|good ?night)\W*$", re.IGNORECASE)
+    r"^\W*((hey\s+)?(rock(y|ie|ey)|aura)\W+)?(go to sleep|sleep|good ?night)\W*$", re.IGNORECASE)
 TRACK_ON_PATTERN = re.compile(r"\b(track me|follow me|watch me|start tracking)\b", re.IGNORECASE)
 TRACK_OFF_PATTERN = re.compile(r"\b(stop (tracking|following|watching)( me)?)\b", re.IGNORECASE)
 
@@ -1025,7 +1025,8 @@ def run(mic: Mic, transcriber: Transcriber, brain: Brain, camera=None,
     if active_character.system_prompt:
         brain.set_persona(active_character.system_prompt)
     pygame.init()
-    pygame.display.set_caption("Rocky")
+    title = active_character.name if active_character else "Aura"
+    pygame.display.set_caption(title)
     desk = pygame.display.Info()
     size = (min(W, int(desk.current_w * 0.94)) if desk.current_w else W,
             min(H, int(desk.current_h * 0.90)) if desk.current_h else H)
