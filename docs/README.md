@@ -13,6 +13,7 @@
 | [`OPEN_SOURCE_OPTIONS.md`](OPEN_SOURCE_OPTIONS.md) | Survey of existing open-source assistant apps (research record; not adopted) |
 | [`ROADMAP.md`](ROADMAP.md) | Phased checklist and decision log |
 | [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) | Camera, audio, Python, Ollama, app bundle, assets |
+| [`TOKEN_MAXIMIZATION_EXPLAINED.md`](TOKEN_MAXIMIZATION_EXPLAINED.md) | Token maximization, context efficiency, and agentic optimization guide |
 | [`CI.md`](CI.md) | CI workflow and local checks |
 | [`GUIDE.md`](GUIDE.md) | Upstream voice-script guide |
 | [`HANDOFF-2026-10-21.md`](HANDOFF-2026-10-21.md) | Original build handoff, preserved for history |
