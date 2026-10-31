@@ -154,12 +154,18 @@ which makes macOS composite the window as see-through. `make lint` is clean and
 bar); here it opened on display 2 at (2648, 238), so a window capture is
 `screencapture -R2648,266,1600,900`.
 
-**Interactive checks (2026-10-30) are still pending.** The app was launched and
-rendered correctly, but the ten spoken/camera checks in `AGENTS.md` (asleep
-ignores room talk, "hey Rocky" wakes, question answers, "what am I holding",
-"look left", "track me" / "stop tracking", "Rocky, sleep", F1 push-to-talk, no
-self-echo on speakers) have not been run by a person yet. Nothing in the HUD,
-`HANDOFF.md`, or `docs/ROADMAP.md` should be ticked until they are.
+**Live app test (2026-10-30, HUD build):** the bundle was launched from
+`Rocky.app`, rendered the HUD correctly, ran both sessions without a crash, and
+was closed normally. The owner reports it working end to end. What the log
+actually shows in `~/Library/Logs/Rocky.log`: `[you] wake up` in the 18:52 run
+and `[you] how's it going` plus `[you] Not too shabby.` in the 19:02 run. So the
+bundle's microphone and faster-whisper transcription work live, and none of
+those phrases woke him — correct for room talk with no wake name. No `[rocky]`
+reply, vision answer, or watch-mode transition was logged, and it is not
+recorded whether "Not too shabby." was the owner or his own voice reaching the
+microphone. The wake → answer, look, watch-mode, F1 and speaker-echo checks are
+therefore user-reported, not log-verified; the ROADMAP checkbox stays unticked
+until a session with logged replies and a vision use is captured.
 
 ### Missing / known weak points
 
@@ -260,8 +266,9 @@ Read order for a new agent:
   - `face detector`: ok
   - Vision output: `'The main object is a red square.'`
 
-The ten interactive checks below are still open — the app launches and renders,
-but no one has spoken to it since the HUD landed.
+The owner exercised the app on 2026-10-30 and reports it working (see the live
+app test entry above); the log captures transcription but no replies or vision,
+so treat the spoken checks as user-reported rather than log-verified.
 
 ## 5. Phases
 
