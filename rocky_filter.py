@@ -37,6 +37,11 @@ def apply_character_filter(text: str, speech_style: str = "clean") -> str:
         cleaned = cleaned.replace("!", ".")
         cleaned = re.sub(r"\s+", " ", cleaned).strip()
 
+    elif speech_style == "alluring":
+        # Aura style: clean, silky speech, strip robotic phrases
+        cleaned = re.sub(r"\b(as an ai|as an artificial intelligence|as a large language model)\b", "", cleaned, flags=re.IGNORECASE).strip()
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+
     return cleaned
 
 

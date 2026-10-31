@@ -35,7 +35,7 @@ class CharacterRegistry:
             characters_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "characters")
         self.characters_dir = characters_dir
         self._characters: Dict[str, CharacterSpec] = {}
-        self.default_id = "rocky"
+        self.default_id = "aura"
         self.load()
 
     def load(self) -> None:
@@ -78,7 +78,9 @@ class CharacterRegistry:
             pass
 
         self._characters = loaded
-        if "rocky" in self._characters:
+        if "aura" in self._characters:
+            self.default_id = "aura"
+        elif "rocky" in self._characters:
             self.default_id = "rocky"
         elif self._characters:
             self.default_id = next(iter(self._characters))
@@ -89,7 +91,7 @@ class CharacterRegistry:
     def default(self) -> CharacterSpec:
         if self.default_id in self._characters:
             return self._characters[self.default_id]
-        return CharacterSpec(id="rocky", name="Rocky")
+        return CharacterSpec(id="aura", name="Aura")
 
     def all_specs(self) -> List[CharacterSpec]:
         return sorted(self._characters.values(), key=lambda c: (c.order, c.id))
