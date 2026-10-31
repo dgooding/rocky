@@ -157,8 +157,11 @@ class HUD:
     # -- static chrome -----------------------------------------------------
     def _build_chrome(self):
         w, h = self.size
-        surf = pygame.Surface((w, h)).convert()
-        surf.fill(BG)
+        # must carry SRCALPHA: blending the translucent grid onto a surface
+        # without the flag zeroes the destination alpha and the window goes
+        # see-through
+        surf = self._surface((w, h))
+        surf.fill((*BG, 255))
 
         grid = self._surface((w, h))
         step = max(16, round(w / 64))

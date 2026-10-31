@@ -1250,6 +1250,7 @@ def render(screen, font, small, t, st, said, msg, typed, recording, eyes,
         awake_left=max(0.0, awake_until - t) if ears_on else 0.0,
         reduced_motion=REDUCE_MOTION,
     ))
+    pygame.display.flip()
 
 
 def _telemetry_loop() -> None:
