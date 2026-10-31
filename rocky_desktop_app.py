@@ -392,15 +392,11 @@ class Ears:
             pass
 
     def can_hear(self) -> bool:
-        # Ears can hear during IDLE, LISTENING, or SPEAKING (barge-in interruption)
-        if not self.enabled or mic_recording:
-            return False
-        if state == SPEAKING:
-            return True
-        return state in (IDLE, LISTENING) and time.monotonic() >= quiet_until
+        return (self.enabled and not mic_recording and state in (IDLE, LISTENING)
+                and time.monotonic() >= quiet_until)
 
     def _loop(self) -> None:
-        global state, quiet_until
+        global state
         while True:
             frame = self.frames.get()
             if frame is None:
@@ -410,18 +406,6 @@ class Ears:
                     state = IDLE
                 self.endpointer.reset()
                 continue
-
-            # Real-time barge-in interruption during SPEAKING:
-            # Rocky's speaker output on mic sits around 0.003 - 0.008 RMS.
-            # When the user speaks up over playback, frame RMS exceeds 0.016.
-            if state == SPEAKING:
-                rms = float(np.sqrt(np.mean(np.square(frame)))) if len(frame) else 0.0
-                if rms > 0.016:
-                    response_cancel.set()
-                    quiet_until = 0.0
-                    state = LISTENING
-                    self.endpointer.reset()
-                    continue
 
             event = self.endpointer.push(frame)
             if event is None:
