@@ -6,10 +6,12 @@ Handles automatic tool execution and multi-turn tool continuations.
 from __future__ import annotations
 
 import base64
+import datetime
 import http.client
 import json
 import os
 import re
+import subprocess
 import sys
 import threading
 import time
@@ -39,6 +41,24 @@ DETAIL_REQUEST_PATTERN = re.compile(
     r"step by step|compare|list|summari[sz]e)\b",
     re.IGNORECASE,
 )
+
+
+def get_system_context() -> str:
+    """Return local macOS context (time, day, battery) to ground the assistant."""
+    now = datetime.datetime.now().strftime("%A, %B %d, %Y at %I:%M %p")
+    ctx = f"[System Context: {now} | OS: macOS]"
+    try:
+        res = subprocess.run(["pmset", "-g", "batt"], capture_output=True, text=True, timeout=1)
+        if "InternalBattery" in res.stdout:
+            for line in res.stdout.splitlines():
+                if "InternalBattery" in line:
+                    batt = line.split(";")[0].split("\t")[-1].strip()
+                    status = line.split(";")[1].strip() if ";" in line else ""
+                    ctx = f"[System Context: {now} | Battery: {batt} ({status}) | OS: macOS]"
+                    break
+    except Exception:
+        pass
+    return ctx
 
 
 def response_token_limit(text: str) -> int:
@@ -111,7 +131,11 @@ class Brain:
         token_limit = response_token_limit(text)
         # Initialize history if not already done
         if not hasattr(self, 'history') or not self.history:
-            self.history = [{"role": "system", "content": getattr(self, "system_prompt", SYSTEM_PROMPT)}]
+            sys_prompt = f"{getattr(self, 'system_prompt', SYSTEM_PROMPT)}\n\n{get_system_context()}"
+            self.history = [{"role": "system", "content": sys_prompt}]
+        else:
+            sys_prompt = f"{getattr(self, 'system_prompt', SYSTEM_PROMPT)}\n\n{get_system_context()}"
+            self.history[0] = {"role": "system", "content": sys_prompt}
         
         if self.api == "openai":
             if self.api_key:
@@ -236,7 +260,11 @@ class Brain:
         
         # Initialize history if not already done
         if not hasattr(self, 'history') or not self.history:
-            self.history = [{"role": "system", "content": getattr(self, "system_prompt", SYSTEM_PROMPT)}]
+            sys_prompt = f"{getattr(self, 'system_prompt', SYSTEM_PROMPT)}\n\n{get_system_context()}"
+            self.history = [{"role": "system", "content": sys_prompt}]
+        else:
+            sys_prompt = f"{getattr(self, 'system_prompt', SYSTEM_PROMPT)}\n\n{get_system_context()}"
+            self.history[0] = {"role": "system", "content": sys_prompt}
         self.history.append({"role": "user", "content": text})
         
         pattern = re.compile(r'<tool_call\s+name=["\']([^"\']*)["\']\s+args=["\'](.*?)["\']\s*/>')
@@ -291,7 +319,12 @@ class Brain:
                         
                         for tr in tool_results:
                             res_content = tr["result"].content if hasattr(tr["result"], 'content') else str(tr["result"])
-                            self.history.append({"role": "tool", "content": res_content})
+                            tool_name = tr["tool_call"]["name"]
+                            prompt_instruction = (
+                                f"[Tool '{tool_name}' result: {res_content}]\n"
+                                f"Answer the user's question directly and concisely in your character's voice using this result."
+                            )
+                            self.history.append({"role": "tool", "content": prompt_instruction})
                         
                         tool_called = True
                         unyielded_buffer = ""
