@@ -65,12 +65,13 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 try:
     import rocky_say as rocky
     import rocky_eyes
+    import rocky_hud
     from tools import ToolRegistry
 except ImportError:
     sys.exit("Run this inside your rocky-tts folder, next to rocky_say.py")
 
 # --- look ---------------------------------------------------------------
-W, H = 640, 400
+W, H = 1600, 900
 BG     = (5, 8, 14)      # Jarvis theme background
 PANEL  = (16, 22, 32)     # Updated color: Panel areas  
 LINE   = (38, 54, 74)     # Updated color: Lines and borders
@@ -96,9 +97,9 @@ SYSTEM_PROMPT = (
     "with enough concrete facts and context to satisfy that request. Do not "
     "restate the question, narrate your reasoning, or add unsolicited tips or "
     "follow-up offers. Avoid roleplay, catchphrases, and exaggerated emotion. "
-    "Do not claim to be human; answer honestly if asked whether you are an AI."
-    "If you need to execute commands or access external tools, use the following format:"
-    "<tool_call name=\"tool_name\" args='{\"arg1\": \"val1\", \"arg2\": \"val2\"}' />"
+    "Do not claim to be human; answer honestly if asked whether you are an AI. "
+    "When asked to open a browser, apps, or execute system actions, ALWAYS use this tool call format: "
+    "<tool_call name=\"open_browser\" args='{\"url\": \"https://www.google.com\"}' />"
 )
 
 DETAIL_REQUEST_PATTERN = re.compile(
@@ -150,6 +151,19 @@ quiet_until = 0.0    # hands-free listening ignores the mic until this time
 face_pos = None      # (x, y) in -1..1 of the face the webcam sees, or None
 awake_until = 0.0    # hands-free answers without "hey Rocky" until this time
 gaze_override = None  # ((x, y), until) - where he was asked to look
+
+# --- what the HUD is allowed to show -------------------------------------
+transcript: collections.deque = collections.deque(maxlen=24)   # (who, text)
+mic_level = 0.0          # input RMS, 0..1, set by Endpointer.push
+latency: dict = {}       # stt / brain / tts, seconds
+telemetry = {"cpu": 0.0, "mem": 0.0, "net": 0.0}
+REDUCE_MOTION = False
+
+
+def remember(who: str, text: str) -> None:
+    text = " ".join((text or "").split())
+    if text and (not transcript or transcript[-1] != (who, text)):
+        transcript.append((who, text))
 response_cancel = threading.Event()
 TTS_ENGINE = "kokoro"
 SYSTEM_VOICE = "Samantha"
@@ -279,6 +293,8 @@ class Endpointer:
     def push(self, frame: np.ndarray):
         """Feed one frame. Returns ("start"|"end"|"drop", audio-or-None) or None."""
         rms = float(np.sqrt(np.mean(np.square(frame)))) if len(frame) else 0.0
+        global mic_level
+        mic_level = min(1.0, rms * 8.0)   # speech sits near 0.02-0.1
         loud = rms > self.threshold()
         if not self.active:
             self.pre.append(frame)
@@ -634,6 +650,7 @@ class Brain:
         body = json.dumps({
             "model": self.model,
             "messages": self.history + [{"role": "user", "content": text}],
+            "tools": self.tools.to_ollama_tools(),
             "stream": True,
             "keep_alive": "30m",
             "options": {"num_predict": token_limit, "temperature": 0.8, "top_p": 0.9,
@@ -723,6 +740,10 @@ class Brain:
         if (cancel_event is not None and cancel_event.is_set()) or not self.available():
             return
         
+        # Initialize history if not already done
+        if not hasattr(self, 'history'):
+            self.history = [{"role": "system", "content": SYSTEM_PROMPT}]
+        
         # Buffer to handle fragmented tool_call tags
         unyielded_buffer = ""
         while True:
@@ -735,7 +756,6 @@ class Brain:
                 if cancel_event is not None and cancel_event.is_set():
                     return
                 
-                match_found = False
                 for delta in self._deltas(response):
                     if cancel_event is not None and cancel_event.is_set():
                         break
@@ -743,56 +763,81 @@ class Brain:
                     token = delta
                     unyielded_buffer += token
                     
-                    # Check for complete tool call
+                    # Check if we have a complete tool_call
                     import re
                     import json
-                    match = re.search(r'(<tool_call\s+name="([^"]+)"\s+args=\'(\\{.*?\}|\[.*?\])\'\s*/>)', unyielded_buffer)
-                    if match:
-                        # 1. Yield preceding text
-                        pre_tag_text = unyielded_buffer[:match.start()]
-                        if pre_tag_text:
-                            yield pre_tag_text
+                    
+                    # Look for tool calls in the response  
+                    pattern = r'<tool_call\s+name=["\']([^"\']*)["\']\s+args=["\']([^"\']*)["\']\s*/>'
+                    matches = list(re.finditer(pattern, unyielded_buffer))
+                    
+                    if matches:
+                        # 1. Yield any preceding text before the first tool call
+                        first_match = matches[0]
+                        pre_tool_text = unyielded_buffer[:first_match.start()]
+                        if pre_tool_text:
+                            yield pre_tool_text
                         
-                        # 2. Execute tool
-                        tool_call_text = match.group(1)
-                        tool_name = match.group(2)
-                        args_str = match.group(3)
-                        try:
-                            args = json.loads(args_str)
-                            # 3. Update history
-                            self.history.append({"role": "assistant", "content": tool_call_text})
-                            result = self.tools.call(tool_name, args)
-                            self.history.append({"role": "user", "content": f"TOOL RESULT: {result.content}"})
+                        # 2. Process each tool call
+                        tool_calls = []
+                        for match in matches:
+                            tool_name = match.group(1)
+                            args_str = match.group(2)
                             
-                            # 4. Prepare for re-generation
-                            unyielded_buffer = unyielded_buffer[match.end():]
-                            match_found = True
-                            break # Restart 'while True'
-                        except Exception as e:
-                            # If tool call is malformed, treat as text or skip
-                            # For now, let's just yield and continue
-                            pass
-
-                    # Handle partial tag buffering
-                    last_open_bracket = unyielded_buffer.rfind('<tool_call')
-                    if last_open_bracket != -1:
-                        # We've encountered a potential tag. Don't yield the part from '<tool_call' onwards.
-                        text_to_yield = unyielded_buffer[:last_open_bracket]
-                        if text_to_yield:
-                            yield text_to_yield
-                        unyielded_buffer = unyielded_buffer[last_open_bracket:]
+                            try:
+                                args = json.loads(args_str) if args_str else {}
+                            except json.JSONDecodeError:
+                                args = {}
+                                
+                            tool_calls.append({
+                                "name": tool_name,
+                                "args": args
+                            })
+                        
+                        # 3. Execute all tool calls in order and collect results
+                        tool_results = []
+                        for tool_call in tool_calls:
+                            tool_name = tool_call["name"]
+                            tool_args = tool_call["args"]
+                            
+                            # Execute the tool
+                            result = self.tools.call(tool_name, tool_args)
+                            tool_results.append({
+                                "tool_call": tool_call,
+                                "result": result
+                            })
+                        
+                        # 4. Update history with tool calls and results  
+                        for tool_call in tool_calls:
+                            tool_name = tool_call["name"]
+                            tool_args = tool_call["args"]
+                            tool_call_text = f'<tool_call name="{tool_name}" args=\'{json.dumps(tool_args)}\' />'
+                            
+                            # Add the tool call to history  
+                            self.history.append({"role": "assistant", "content": tool_call_text})
+                        
+                        for tool_result in tool_results:
+                            result_content = tool_result["result"].content if hasattr(tool_result["result"], 'content') else str(tool_result["result"])
+                            # Add the tool result back into conversation history
+                            self.history.append({"role": "tool", "content": result_content})
+                        
+                        # 5. Prepare for next iteration by clearing buffer and re-sending request
+                        unyielded_buffer = unyielded_buffer[first_match.end():]
+                        
+                        # Restart the loop to get new response with tool results included
+                        continue
                     else:
-                        # No partial tag detected, yield everything
-                        if unyielded_buffer:
+                        # No complete tool call found yet, check if we have a complete text block to yield
+                        if unyielded_buffer and unyielded_buffer.rfind('<') == -1:
+                            # No starting bracket detected, so we can safely yield the content 
                             yield unyielded_buffer
                             unyielded_buffer = ""
-                
-                # If generator finishes without a match, check for remaining buffer
-                if not match_found:
-                    if unyielded_buffer:
-                        yield unyielded_buffer
-                        unyielded_buffer = ""
-                    break
+                        
+                # If we finish the loop without tool calls, yield remaining buffer
+                if unyielded_buffer:
+                    yield unyielded_buffer
+                    unyielded_buffer = ""
+                break
                     
             except (urllib.error.URLError, TimeoutError, ValueError, OSError,
                     http.client.HTTPException) as e:
@@ -990,6 +1035,8 @@ def speak(sentences, cancel_event: threading.Event | None = None) -> None:
             continue
         state = SPEAKING
         play_with_envelope(wav, cancel_event=cancel_event)
+    if said:
+        remember("rocky", said)
 
 
 def look(camera, brain: Brain, question: str = "",
@@ -1064,7 +1111,9 @@ def worker(transcriber: Transcriber, brain: Brain, camera, watcher=None) -> None
                     note, state = "didn't catch that", IDLE
                     continue
                 state, eyes_emotion = THINKING, "thinking"
+                _t0 = time.monotonic()
                 heard = transcriber.transcribe(job["audio"])
+                latency["stt"] = time.monotonic() - _t0
                 if job.get("hands_free"):
                     if heard.strip(" .!?,").lower() in PHANTOM_PHRASES:
                         state = IDLE
@@ -1085,6 +1134,7 @@ def worker(transcriber: Transcriber, brain: Brain, camera, watcher=None) -> None
                     note, state = "didn't catch that", IDLE
                     continue
                 subtitle = "you: " + heard
+                remember("you", heard)
                 text = heard
             else:
                 text = job["text"]
@@ -1125,7 +1175,18 @@ def worker(transcriber: Transcriber, brain: Brain, camera, watcher=None) -> None
             state, eyes_emotion = THINKING, "thinking"
             if brain.available():
                 print(f"[you] {text}", file=sys.stderr)
-                speak(sentence_stream(brain, text, response_cancel), response_cancel)
+                _t0 = time.monotonic()
+                first = [True]
+
+                def timed(gen= None):
+                    for sentence in sentence_stream(brain, text, response_cancel):
+                        if first[0]:
+                            latency["brain"] = time.monotonic() - _t0
+                            first[0] = False
+                        yield sentence
+
+                speak(timed(), response_cancel)
+                latency.setdefault("brain", time.monotonic() - _t0)
             else:
                 # echo mode: he repeats you back in his own grammar
                 print(f"[rocky] {text}", file=sys.stderr)
@@ -1144,320 +1205,84 @@ def worker(transcriber: Transcriber, brain: Brain, camera, watcher=None) -> None
 # --- drawing ------------------------------------------------------------
 chrome_cache = {}  # keyed by (W, H) to avoid recreating it every frame
 
+_hud = None
+_hud_size = (0, 0)
+_last_frame_t = 0.0
+
+
+def _phase_for(st, ears_on: bool, awake: bool) -> str:
+    if st == LISTENING:
+        return "listening"
+    if st == THINKING:
+        return "thinking"
+    if st == SPEAKING:
+        return "speaking"
+    return "asleep" if (ears_on and not awake) else "idle"
+
+
 def render(screen, font, small, t, st, said, msg, typed, recording, eyes,
            ears_on=False, watching=False, awake=False):
-    global chrome_cache
-    
-    # Build or retrieve static chrome
-    chrome_key = (W, H)
-    if chrome_key not in chrome_cache:
-        chrome = pygame.Surface((W, H), pygame.SRCALPHA)
-        chrome.fill(BG)
-        
-        # Draw 20 px dot grid in LINE at ~40% brightness 
-        for y in range(0, H, 20):
-            for x in range(0, W, 20):
-                pygame.draw.circle(chrome, LINE, (x + 10, y + 10), 1)
-        
-        # Draw 1 px inset border rect
-        border_rect = pygame.Rect(8, 8, W - 16, H - 16)
-        pygame.draw.rect(chrome, LINE, border_rect, 1)
-        
-        # Draw 18 px corner brackets in ACCENT at all four corners (2 px thick L shapes)
-        # Top-left bracket
-        pygame.draw.line(chrome, ACCENT, (8, 8), (26, 8), 2)
-        pygame.draw.line(chrome, ACCENT, (8, 8), (8, 26), 2)
-        
-        # Top-right bracket  
-        pygame.draw.line(chrome, ACCENT, (W-8, 8), (W-26, 8), 2)
-        pygame.draw.line(chrome, ACCENT, (W-8, 8), (W-8, 26), 2)
-        
-        # Bottom-left bracket
-        pygame.draw.line(chrome, ACCENT, (8, H-8), (26, H-8), 2)
-        pygame.draw.line(chrome, ACCENT, (8, H-8), (8, H-26), 2)
-        
-        # Bottom-right bracket
-        pygame.draw.line(chrome, ACCENT, (W-8, H-8), (W-26, H-8), 2)
-        pygame.draw.line(chrome, ACCENT, (W-8, H-8), (W-8, H-26), 2)
-        
-        chrome_cache[chrome_key] = chrome
-    
-    # Blit the static chrome
-    screen.blit(chrome_cache[chrome_key], (0, 0))
-    
-    # Draw eyes in the center
-    eyes.draw(screen, t, glow=0.5 + amplitude * 0.9)
-    
-    # Header
-    header_y = 14
-    
-    # Rockey logo
-    font_large = pygame.font.SysFont(FONT_NAME, 18)
-    rocky_text = font_large.render("ROCKY", True, ACCENT)
-    screen.blit(rocky_text, ((W - rocky_text.get_width()) // 2, header_y))
-    
-    # Separator dot
-    sep_dot = pygame.Surface((6, 6), pygame.SRCALPHA)
-    pygame.draw.circle(sep_dot, LINE, (3, 3), 3)
-    screen.blit(sep_dot, ((W - rocky_text.get_width()) // 2 + rocky_text.get_width() + 8, header_y + 7))
-    
-    # Mic state  
-    mic_x = (W - rocky_text.get_width()) // 2 + rocky_text.get_width() + 24
-    if ears_on:
-        mic_dot = pygame.Surface((6, 6), pygame.SRCALPHA)
-        pygame.draw.circle(mic_dot, OK, (3, 3), 3)  
-        screen.blit(mic_dot, (mic_x, header_y + 7))
-        mic_text = small.render("MIC ON", True, OK)
-    else:
-        mic_dot = pygame.Surface((6, 6), pygame.SRCALPHA)
-        pygame.draw.circle(mic_dot, DIM, (3, 3), 3)  
-        screen.blit(mic_dot, (mic_x, header_y + 7))
-        mic_text = small.render("MIC OFF", True, DIM)
-    screen.blit(mic_text, (mic_x + 12, header_y))
-    
-    # Camera state  
-    cam_x = mic_x + mic_text.get_width() + 36
-    if watching:
-        cam_dot = pygame.Surface((6, 6), pygame.SRCALPHA)
-        pygame.draw.circle(cam_dot, WARN, (3, 3), 3)  
-        screen.blit(cam_dot, (cam_x, header_y + 7))
-        cam_text = small.render("CAM ON", True, WARN)
-    else:
-        cam_dot = pygame.Surface((6, 6), pygame.SRCALPHA)
-        pygame.draw.circle(cam_dot, DIM, (3, 3), 3)  
-        screen.blit(cam_dot, (cam_x, header_y + 7))
-        cam_text = small.render("CAM OFF", True, DIM)
-    screen.blit(cam_text, (cam_x + 12, header_y))
-    
-    # State chip (on right)
-    chip_width = 120
-    chip_height = 26 
-    chip_x = W - chip_width - 16
-    chip_y = header_y
-    
-    state_colors = {
-        IDLE: DIM,
-        LISTENING: OK,
-        THINKING: ACCENT,
-        SPEAKING: (255, 206, 120)  # Warm speaking color as specified
-    }
-    
-    # Draw chip background with 12% alpha fill
-    state_color = state_colors.get(st, DIM)
-    pygame.draw.rect(screen, (*state_color[:3], int(0.12 * 255)), 
-                     (chip_x, chip_y, chip_width, chip_height), border_radius=6, 
-                     width=0)  # fill with alpha
-    
-    # Draw border
-    pygame.draw.rect(screen, LINE, (chip_x, chip_y, chip_width, chip_height), 
-                     border_radius=6, width=1)
-    
-    # State name text  
-    state_text = small.render(st, True, state_color)
-    screen.blit(state_text, (chip_x + 12, chip_y + 4))
-    
-    # Awake/Asleep indicator 
-    awake_text = small.render("AWAKE" if awake else "ASLEEP", True, OK if awake else DIM)
-    screen.blit(awake_text, (chip_x + state_text.get_width() + 18, chip_y + 4))
-    
-    # Time text
-    time_text = small.render(time.strftime("%H:%M:%S"), True, DIM)
-    screen.blit(time_text, (chip_x + state_text.get_width() + awake_text.get_width() + 36, chip_y + 4))
-    
-    # Assistant core area with eyes at center of screen at (W//2, 200) 
-    eye_center = (W // 2, 200)
-    
-    # Draw full circle around the eyes at radius 108 in LINE
-    pygame.draw.circle(screen, LINE, eye_center, 108, 1)
-      
-    # Draw 24 tick marks on radius 118  
-    for i in range(24):
-        angle = (i * 360) / 24  # degrees
-        radians = math.radians(angle)
-        x1 = eye_center[0] + math.cos(radians) * 118
-        y1 = eye_center[1] + math.sin(radians) * 118
-        if i % 4 == 0:
-            length = 8  # Longer ticks every 4th
-        else:
-            length = 4  # Shorter ticks  
-        x2 = eye_center[0] + math.cos(radians) * (118 + length)
-        y2 = eye_center[1] + math.sin(radians) * (118 + length)
-        pygame.draw.line(screen, LINE, (x1, y1), (x2, y2), 1)
-        
-    # Draw the state arc
-    arc_radius = 108
-    arc_width = 2
-    rect = pygame.Rect(eye_center[0] - arc_radius, eye_center[1] - arc_radius,
-                       arc_radius * 2, arc_radius * 2)
-    
-    if st == LISTENING:
-        # Breathing 90° arc in OK (length modulated by sin(t*2)) 
-        arc_length = 90 + 45 * math.sin(t * 2)
-        start_angle = -45
-        end_angle = start_angle + arc_length
-    elif st == THINKING:
-        # 120° rotating arc in ACCENT 
-        start_angle = t * 180 % 360  
-        end_angle = start_angle + 120
-    elif st == SPEAKING:
-        # Arc from 0° to (90 + 180*amplitude)° in warm color
-        start_angle = 0 
-        end_angle = 90 + 180 * amplitude
-    else:  # IDLE
-        # Static 90° arc in DIM  
-        start_angle = -45
-        end_angle = 45
-        
-    if st == LISTENING or st == THINKING or st == SPEAKING:
-        # Highlight ticks inside active arc with ACCENT color
-        for i in range(24):
-            angle = (i * 360) / 24  # degrees
-            if st == LISTENING or st == SPEAKING:  
-                # Show ACCENT for all ticks when listening/speaking
-                tick_color = ACCENT
-            elif st == THINKING:
-                # Use ACCENT for tick inside the thinking arc and LINE for outside 
-                if start_angle <= angle <= end_angle or (start_angle < 0 and angle >= 360 + start_angle):
-                    tick_color = ACCENT 
-                else:
-                    tick_color = LINE
-            else:
-                tick_color = LINE
-            
-            radians = math.radians(angle)
-            x1 = eye_center[0] + math.cos(radians) * 118
-            y1 = eye_center[1] + math.sin(radians) * 118
-            if i % 4 == 0:
-                length = 8  
-            else:
-                length = 4  
-            x2 = eye_center[0] + math.cos(radians) * (118 + length)
-            y2 = eye_center[1] + math.sin(radians) * (118 + length)
-            pygame.draw.line(screen, tick_color, (x1, y1), (x2, y2), 1)
-    
-    # Draw arc in state color
-    arc_color = state_colors.get(st, DIM) if st != SPEAKING else (255, 206, 120) 
-    if recording:
-        arc_color = REC
-        
-    pygame.draw.arc(screen, arc_color, rect, math.radians(start_angle), 
-                    math.radians(end_angle), arc_width)
-    
-    # Recording indicator  
-    if recording:
-        rec_text = small.render("● REC", True, REC)
-        screen.blit(rec_text, (W - 24 - 50, header_y + 16))
-        
-    # Waveform at y baseline 300, 48 bars, centred, 2px wide with 6px pitch
-    waveform_y = 300
-    bar_count = 48
-    total_width = bar_count * 2 + (bar_count - 1) * 6
-    start_x = (W - total_width) // 2
-    if amplitude < 0.02:  
-        # Hairline at the center  
-        pygame.draw.line(screen, LINE, (start_x, waveform_y), (start_x + total_width, waveform_y), 1)
-    else:
-        for i in range(bar_count):
-            wobble = 0.35 + 0.65 * abs(math.sin(t * 6 + i * 0.7))
-            bar_height = 2 + 26 * amplitude * wobble
-            bar_x = start_x + i * (2 + 6)
-            
-            # Draw both top and bottom halves symmetrically
-            pygame.draw.line(screen, ACCENT, (bar_x, waveform_y - bar_height/2), 
-                            (bar_x, waveform_y + bar_height/2), 2)
+    """The only UI entry point: hand the frame to rocky_hud."""
+    global _hud, _hud_size, _last_frame_t
+    size = screen.get_size()
+    if _hud is None or _hud_size != size:
+        _hud, _hud_size = rocky_hud.HUD(size), size
+    dt = (t - _last_frame_t) if 0 < t - _last_frame_t < 0.5 else 1.0 / FPS
+    _last_frame_t = t
 
-    # Caption card  
-    caption_rect = pygame.Rect(16, 314, W-32, 48)
-    pygame.draw.rect(screen, PANEL, caption_rect, border_radius=6, width=1) 
-    pygame.draw.line(screen, LINE, (caption_rect.left, caption_rect.top), 
-                    (caption_rect.right, caption_rect.top), 1)
-    pygame.draw.line(screen, LINE, (caption_rect.left, caption_rect.bottom), 
-                    (caption_rect.right, caption_rect.bottom), 1)
-    
-    # Caption text
-    if said:
-        # Measure full text first to determine if we need to ellipsize
-        text_width = font.size(said)[0]
-        if text_width > W - 32 - 20:  # 16 px left/right padding + 4 px margin
-            # Need to truncate  
-            truncated = said
-            while font.size(truncated)[0] > W - 32 - 20 and len(truncated) > 0:
-                truncated = truncated[:-1]
-            if truncated: 
-                if truncated != said:
-                    said_text = truncated + "…"
-                else:
-                    said_text = said
-            else:
-                said_text = ""
-        else:
-            said_text = said
-            
-        screen.blit(font.render(said_text, True, INK), (28, 328))
-    elif st == THINKING:
-        thinking_text = small.render("thinking…", True, ACCENT)
-        screen.blit(thinking_text, (28, 328))
-    elif st == IDLE and not said:
-        hint_text = small.render(HINT, True, DIM)
-        screen.blit(hint_text, (28, 328))
-    
-    # Command bar
-    cmd_x, cmd_y = 16, 368
-    cmd_width, cmd_height = W-32, 24
-    
-    pygame.draw.rect(screen, PANEL, (cmd_x, cmd_y, cmd_width, cmd_height), border_radius=4, width=1)
-    
-    # Set command bar color based on recording or typing state
-    if not recording and typed:
-        bar_color = ACCENT 
+    phase = _phase_for(st, ears_on, awake)
+    if st == SPEAKING and said:          # live caption while he talks
+        note = said
     else:
-        bar_color = LINE
-    
-    pygame.draw.rect(screen, (*bar_color[:3], 255), (cmd_x + 4, cmd_y + 1, cmd_width - 8, cmd_height - 2), border_radius=3)
-        
-    # Text in command bar  
-    caret = "_" if int(t * 2) % 2 else " "
-    full_text = "> " + typed
-    displayed_text = full_text
-    
-    # Check if the command text is too long to fit 
-    text_width = small.size(displayed_text)[0] + 10  # add spacing
-    if text_width > cmd_width - 28:  # leave about 16 px padding + 12 for caret
-        # Find longest substring that fits
-        max_chars = len(displayed_text)
-        while max_chars > 0:
-            test_str = displayed_text[:max_chars]
-            if small.size(test_str)[0] <= cmd_width - 28:
-                displayed_text = test_str 
-                break
-            max_chars -= 1
-            
-        if max_chars == 0:
-            displayed_text = ""
-    
-    # Draw command prompt or empty text  
-    if typed:
-        screen.blit(small.render(displayed_text, True, INK), (28, 374))
-    else: 
-        hint = small.render("type a message or hold F1", True, DIM)
-        screen.blit(hint, (28, 374))
-        
-    # Draw caret if typed
-    if typed:
-        caret_x = 28 + small.size(displayed_text)[0]
-        screen.blit(small.render(caret, True, INK), (caret_x, 374)) 
-    
-    # Msg (errors/notes) - right aligned, then left aligned when needed to fit
-    if msg and len(msg) > 0:
-        label = small.render(msg[:68], True, WARN)
-        # Check if it fits on the right side of caption card
-        right_aligned_x = W - 16 - label.get_width() 
-        if right_aligned_x > (28 + label.get_width()):  # Has room to be right-aligned  
-            screen.blit(label, (right_aligned_x, 328))  
-        else:  # Place on left side of command bar
-            screen.blit(label, (28, 368 + 12))  # Place under the command bar
-            
-    pygame.display.flip()
+        note = msg or ('say "hey rocky"' if phase == "asleep" else "")
+    _hud.draw(screen, t, dt, rocky_hud.HUDState(
+        phase=phase,
+        transcript=list(transcript),
+        note=note,
+        typed=typed,
+        amplitude=amplitude,
+        mic_level=mic_level,
+        telemetry=telemetry,
+        latency=latency,
+        camera=bool(watching),
+        watching=bool(watching),
+        face=face_pos,
+        awake_left=max(0.0, awake_until - t) if ears_on else 0.0,
+        reduced_motion=REDUCE_MOTION,
+    ))
+
+
+def _telemetry_loop() -> None:
+    """1 Hz system figures. stdlib only; failures leave the bar at zero."""
+    pages, page = os.sysconf("SC_PHYS_PAGES"), os.sysconf("SC_PAGE_SIZE")
+    total = pages * page
+    last_net, last_t = None, time.monotonic()
+    while True:
+        try:
+            load = os.getloadavg()[0] / max(1, os.cpu_count() or 1)
+            telemetry["cpu"] = max(0.0, min(1.0, load))
+        except OSError:
+            pass
+        try:
+            free = os.sysconf("SC_AVPHYS_PAGES") * page
+            telemetry["mem"] = max(0.0, min(1.0, 1.0 - free / total))
+        except (OSError, ValueError):
+            pass
+        try:
+            out = subprocess.run(["netstat", "-ibn"], capture_output=True,
+                                 text=True, timeout=2).stdout
+            total_bytes = 0
+            for line in out.splitlines():
+                f = line.split()
+                if len(f) >= 10 and f[0].startswith("en"):
+                    total_bytes = max(total_bytes, int(f[6]) + int(f[9]))
+            now = time.monotonic()
+            if last_net is not None and now > last_t:
+                telemetry["net"] = max(0.0, min(1.0, (total_bytes - last_net) / (now - last_t) / 12_500_000))
+            last_net, last_t = total_bytes, now
+        except (OSError, subprocess.SubprocessError, ValueError):
+            pass
+        time.sleep(1.0)
 
 
 def run(mic: Mic, transcriber: Transcriber, brain: Brain, camera=None,
@@ -1465,7 +1290,10 @@ def run(mic: Mic, transcriber: Transcriber, brain: Brain, camera=None,
     global state, mic_recording, note
     pygame.init()
     pygame.display.set_caption("Rocky")
-    screen = pygame.display.set_mode((W, H))
+    desk = pygame.display.Info()
+    size = (min(W, int(desk.current_w * 0.94)) if desk.current_w else W,
+            min(H, int(desk.current_h * 0.90)) if desk.current_h else H)
+    screen = pygame.display.set_mode(size)
     font = pygame.font.SysFont(FONT_NAME, 15)
     small = pygame.font.SysFont(FONT_NAME, 13)
     clock = pygame.time.Clock()
@@ -1473,6 +1301,7 @@ def run(mic: Mic, transcriber: Transcriber, brain: Brain, camera=None,
 
     threading.Thread(target=worker, args=(transcriber, brain, camera, watcher),
                      daemon=True).start()
+    threading.Thread(target=_telemetry_loop, daemon=True).start()
     threading.Thread(target=transcriber.warm, daemon=True).start()
     threading.Thread(target=brain.warm, daemon=True).start()
     if ears is not None and hands_free and not ears.start():
@@ -1808,7 +1637,11 @@ def main() -> None:
     ap.add_argument("--kokoro-voice", default="bf_emma",
                     help="Kokoro voice preset (default bf_emma, British English)")
     ap.add_argument("--selftest", action="store_true", help="verify stt/brain/eyes, no mic")
+    ap.add_argument("--reduce-motion", action="store_true",
+                    help="freeze HUD sweeps and pulses")
     args = ap.parse_args()
+    global REDUCE_MOTION
+    REDUCE_MOTION = args.reduce_motion
 
     if not 200 <= args.end_silence_ms <= 2000:
         ap.error("--end-silence-ms must be between 200 and 2000")
