@@ -77,6 +77,8 @@ try:
         sentence_stream,
     )
     from tools import ToolRegistry, default_registry
+    from character_registry import CharacterRegistry, CharacterSpec
+    from rocky_filter import apply_character_filter, detect_utterance_emotion, parse_wake_utterance
 except ImportError:
     sys.exit("Run this inside your rocky-tts folder, next to rocky_say.py")
 
@@ -153,7 +155,27 @@ TTS_ENGINE = "kokoro"
 SYSTEM_VOICE = "Samantha"
 SYSTEM_VOICE_RATE = 185
 KOKORO_VOICE = "bf_emma"
-_KOKORO_PIPELINE = None
+_KOKORO_PIPELINES = {}
+
+character_registry = CharacterRegistry()
+active_character = character_registry.default()
+
+
+def switch_character(char_spec: CharacterSpec, brain: Brain | None = None) -> None:
+    """Switch active character persona, prompt, and voice dynamically."""
+    global active_character, KOKORO_VOICE, TTS_ENGINE, SYSTEM_VOICE
+    active_character = char_spec
+    if brain is not None and char_spec.system_prompt:
+        brain.set_persona(char_spec.system_prompt)
+    if char_spec.voice_engine:
+        TTS_ENGINE = char_spec.voice_engine
+    if char_spec.voice_name:
+        if TTS_ENGINE == "kokoro":
+            KOKORO_VOICE = char_spec.voice_name
+        else:
+            SYSTEM_VOICE = char_spec.voice_name
+    print(f"[character] active: {char_spec.name} ({TTS_ENGINE}:{char_spec.voice_name})", file=sys.stderr)
+
 
 
 # --- audio --------------------------------------------------------------
@@ -567,13 +589,17 @@ class Transcriber:
 
 # --- pipeline -----------------------------------------------------------
 def synthesize(text: str):
-    global _KOKORO_PIPELINE
+    global _KOKORO_PIPELINES
     if TTS_ENGINE == "kokoro":
-        if _KOKORO_PIPELINE is None:
+        # American voices start with "a", British voices start with "b"
+        lang = "a" if KOKORO_VOICE.startswith("a") else "b"
+        if lang not in _KOKORO_PIPELINES:
             from kokoro import KPipeline
-            _KOKORO_PIPELINE = KPipeline(lang_code="b")
-        chunks = [audio for _, _, audio in _KOKORO_PIPELINE(
-            text, voice=KOKORO_VOICE, speed=1.0
+            _KOKORO_PIPELINES[lang] = KPipeline(lang_code=lang)
+        pipeline = _KOKORO_PIPELINES[lang]
+        speed = getattr(active_character, "speed", 1.0)
+        chunks = [audio for _, _, audio in pipeline(
+            text, voice=KOKORO_VOICE, speed=speed
         )]
         if not chunks:
             raise RuntimeError("Kokoro produced no speech audio")
@@ -625,7 +651,7 @@ def clause_split(sentence: str, first: bool = False, first_limit: int = 38,
 
 def speak(sentences, cancel_event: threading.Event | None = None) -> None:
     """Synthesize ahead of playback; start talking as soon as clause 1 exists."""
-    global state, subtitle, eyes_emotion
+    global state, subtitle, eyes_emotion, quiet_until
     prefetch: queue.Queue = queue.Queue(maxsize=3)
     said = ""
 
@@ -645,7 +671,11 @@ def speak(sentences, cancel_event: threading.Event | None = None) -> None:
             for sentence in sentences:
                 if cancel_event is not None and cancel_event.is_set():
                     break
-                for chunk in clause_split(sentence, first=first):
+                style = getattr(active_character, "speech_style", "clean")
+                clean_sentence = apply_character_filter(sentence, style)
+                if not clean_sentence:
+                    continue
+                for chunk in clause_split(clean_sentence, first=first):
                     if cancel_event is not None and cancel_event.is_set():
                         break
                     if not enqueue(synthesize(chunk)):
@@ -670,11 +700,13 @@ def speak(sentences, cancel_event: threading.Event | None = None) -> None:
         spoken, wav = item
         said = f"{said} {spoken}".strip()
         subtitle = said
-        eyes_emotion = rocky_eyes.mood_for(said)
+        style = getattr(active_character, "speech_style", "clean")
+        eyes_emotion = detect_utterance_emotion(said, default_mood=rocky_eyes.mood_for(said))
         if wav is None:
             continue
         state = SPEAKING
         play_with_envelope(wav, cancel_event=cancel_event)
+    quiet_until = max(quiet_until, time.monotonic() + 0.35)
     if said:
         remember("rocky", said)
 
@@ -758,16 +790,28 @@ def worker(transcriber: Transcriber, brain: Brain, camera, watcher=None) -> None
                     if heard.strip(" .!?,").lower() in PHANTOM_PHRASES:
                         state = IDLE
                         continue
-                    wake = WAKE_PATTERN.search(heard)
-                    if wake is None and time.monotonic() >= awake_until:
-                        state = IDLE  # asleep, and nobody said "hey Rocky"
+                    # Check wake words across characters
+                    matched_char, remainder, is_wake = parse_wake_utterance(
+                        heard, active_character, character_registry
+                    )
+                    wake_legacy = WAKE_PATTERN.search(heard)
+                    is_awake = (time.monotonic() < awake_until)
+
+                    if not is_wake and wake_legacy is None and not is_awake:
+                        state = IDLE  # asleep, and nobody said a wake word
                         continue
-                    if wake is not None:
+
+                    if is_wake or wake_legacy is not None:
+                        if is_wake and matched_char.id != active_character.id:
+                            switch_character(matched_char, brain)
                         stay_awake()
-                        rest = heard[wake.end():].strip(" ,.!?")
-                        if not rest:  # just his name: look up and wait
-                            subtitle, eyes_emotion, state = "you: " + heard, "surprised", IDLE
+                        rest = remainder if is_wake else heard[wake_legacy.end():].strip(" ,.!?")
+                        if not rest:  # just character name: say character wake reply
+                            subtitle = "you: " + heard
+                            eyes_emotion = "surprised"
                             gaze_override = ((0.0, -4.0), time.monotonic() + 2.0)
+                            say_line(active_character.wake_reply, response_cancel)
+                            state = IDLE
                             continue
                         heard = rest
                 if not heard:
@@ -778,13 +822,23 @@ def worker(transcriber: Transcriber, brain: Brain, camera, watcher=None) -> None
                 text = heard
             else:
                 text = job["text"]
+
+            # Dynamic character routing on typed text turns as well
+            matched_char, remainder, is_wake = parse_wake_utterance(
+                text, active_character, character_registry
+            )
+            if is_wake:
+                if matched_char.id != active_character.id:
+                    switch_character(matched_char, brain)
+                text = remainder if remainder else text
+
             wake = WAKE_PATTERN.match(text)
             if wake is not None and text[wake.end():].strip():
                 text = text[wake.end():].strip()
 
             if SLEEP_PATTERN.match(text):
                 awake_until = 0.0
-                say_line("Goodnight, friend.", response_cancel)
+                say_line(active_character.sleep_reply, response_cancel)
                 eyes_emotion = "sleepy"
                 continue
             stay_awake()
@@ -929,6 +983,8 @@ def _telemetry_loop() -> None:
 def run(mic: Mic, transcriber: Transcriber, brain: Brain, camera=None,
         ears=None, watcher=None, hands_free: bool = True, watch: bool = False) -> None:
     global state, mic_recording, note
+    if active_character.system_prompt:
+        brain.set_persona(active_character.system_prompt)
     pygame.init()
     pygame.display.set_caption("Rocky")
     desk = pygame.display.Info()
@@ -1277,6 +1333,8 @@ def main() -> None:
                     help="installed macOS voice name for --tts-engine macos (default Samantha)")
     ap.add_argument("--kokoro-voice", default="bf_emma",
                     help="Kokoro voice preset (default bf_emma, British English)")
+    ap.add_argument("--character", default="rocky",
+                    help="initial character persona (rocky, marvin, bmo, tars)")
     ap.add_argument("--selftest", action="store_true", help="verify stt/brain/eyes, no mic")
     ap.add_argument("--reduce-motion", action="store_true",
                     help="freeze HUD sweeps and pulses")
@@ -1290,9 +1348,12 @@ def main() -> None:
     if args.selftest:
         sys.exit(selftest(args.no_brain))
 
-    TTS_ENGINE, SYSTEM_VOICE, KOKORO_VOICE = (
-        args.tts_engine, args.system_voice, args.kokoro_voice
-    )
+    init_char = character_registry.get(args.character) or character_registry.default()
+    switch_character(init_char)
+    if args.tts_engine != "kokoro" or args.kokoro_voice != "bf_emma":
+        TTS_ENGINE, SYSTEM_VOICE, KOKORO_VOICE = (
+            args.tts_engine, args.system_voice, args.kokoro_voice
+        )
     selected_voice = (f" ({KOKORO_VOICE})" if TTS_ENGINE == "kokoro" else
                       f" ({SYSTEM_VOICE})" if TTS_ENGINE == "macos" else "")
     print(f"[voice] {TTS_ENGINE}{selected_voice}", file=sys.stderr)

@@ -55,7 +55,8 @@ class Brain:
 
     def __init__(self, model: str = "qwen3-coder:latest", host: str = "http://localhost:11434",
                  enabled: bool = True, api: str = "ollama", api_key: str = "",
-                 vision_model: str = "qwen2.5vl:3b", context: int = 8192) -> None:
+                 vision_model: str = "qwen2.5vl:3b", context: int = 8192,
+                 system_prompt: str = SYSTEM_PROMPT) -> None:
         self.model, self.host, self.enabled = model, host.rstrip("/"), enabled
         self.api, self.api_key = api, api_key
         self.vision_model = vision_model
@@ -66,6 +67,15 @@ class Brain:
         self._response_lock = threading.Lock()
         self._active_response = None
         self.tools = default_registry
+        self.system_prompt = system_prompt
+
+    def set_persona(self, system_prompt: str) -> None:
+        """Update system persona prompt and conversation history."""
+        self.system_prompt = system_prompt
+        if hasattr(self, 'history') and self.history:
+            self.history[0] = {"role": "system", "content": system_prompt}
+        else:
+            self.history = [{"role": "system", "content": system_prompt}]
 
     def cancel(self) -> None:
         """Close the active text stream so an interrupted turn can finish."""
@@ -101,7 +111,7 @@ class Brain:
         token_limit = response_token_limit(text)
         # Initialize history if not already done
         if not hasattr(self, 'history') or not self.history:
-            self.history = [{"role": "system", "content": SYSTEM_PROMPT}]
+            self.history = [{"role": "system", "content": getattr(self, "system_prompt", SYSTEM_PROMPT)}]
         
         if self.api == "openai":
             if self.api_key:
@@ -226,7 +236,7 @@ class Brain:
         
         # Initialize history if not already done
         if not hasattr(self, 'history') or not self.history:
-            self.history = [{"role": "system", "content": SYSTEM_PROMPT}]
+            self.history = [{"role": "system", "content": getattr(self, "system_prompt", SYSTEM_PROMPT)}]
         self.history.append({"role": "user", "content": text})
         
         pattern = re.compile(r'<tool_call\s+name=["\']([^"\']*)["\']\s+args=["\'](.*?)["\']\s*/>')
@@ -377,19 +387,48 @@ def split_sentences(text: str, limit: int = 150):
 
 def sentence_stream(brain: Brain, text: str,
                     cancel_event: threading.Event | None = None):
-    """Turn streamed LLM deltas into sentences, yielding each as it completes."""
+    """Turn streamed LLM deltas into sentences and early opener clauses.
+
+    Splits on sentence endings (.!?), or on early clause boundaries (,;:—) on the
+    opening phrase so TTS can start in ~300ms while remaining tokens are still
+    generating.
+    """
     buf = ""
+    is_first = True
+
     for delta in brain.stream(text, cancel_event=cancel_event):
         if cancel_event is not None and cancel_event.is_set():
             return
         buf += delta
+
         while True:
-            m = re.search(r"[.!?](\s|$)", buf)
-            if not m:
-                break
-            end = m.end()
-            sentence, buf = buf[:end].strip(), buf[end:]
-            if sentence:
-                yield sentence
+            # 1. Full sentence boundary
+            m_sent = re.search(r"[.!?]+(?:\s+|$)", buf)
+            if m_sent:
+                end = m_sent.end()
+                chunk = buf[:end].strip()
+                if len(chunk) >= 6 or not is_first:
+                    buf = buf[end:]
+                    is_first = False
+                    if chunk:
+                        yield chunk
+                    continue
+
+            # 2. Early clause boundary for chunk 0
+            if is_first:
+                m_clause = re.search(r"[,;:\u2014]+(?:\s+)", buf)
+                if m_clause:
+                    clause = buf[:m_clause.start()].strip() + m_clause.group(0).rstrip()
+                    rest = buf[m_clause.end():]
+                    # Ensure enough characters to sound natural, avoid splitting numbers/dates or questions
+                    if len(clause) >= 10 and len(rest.strip()) >= 10:
+                        if not (clause[-1].isdigit() and rest.strip()[0].isdigit()):
+                            if not rest.strip().startswith("question?"):
+                                buf = rest
+                                is_first = False
+                                yield clause
+                                continue
+            break
+
     if buf.strip():
         yield buf.strip()

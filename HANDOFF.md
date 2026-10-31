@@ -201,6 +201,18 @@ token.
   `voice-recovery-drama3`. The duplicate folder `~/Documents/Rocky` was backed
   up to `~/Documents/Rocky-backup-20261030` and replaced with a symlink to
   `/Users/aiserver/rocky`, preventing future codebase drift.
+- **Engine upgrades (David's blueprint integration):**
+  - Integrated `character_registry.py` and dynamic manifests in `characters/*.json`
+    (`rocky.json`, `marvin.json`, `bmo.json`, `tars.json`) with hot-reloading and
+    zero-code persona creation.
+  - Implemented one-breath dynamic character routing in `rocky_filter.py` for both
+    voice and typed turns ("Hey Marvin, ...", "Hey TARS, ...", "Hey BMO, ...").
+  - Implemented low-latency opener clause popping in `rocky_brain.py` (`sentence_stream`)
+    splitting on early punctuation (`[.!?]` at min 6 chars, `[,;:\u2014]` at min 10 chars)
+    for sub-500ms Time-To-First-Audio.
+  - Added 350ms speaker echo cooldown guard to prevent self-interruption / reverberation
+    feedback loops on open laptop speakers.
+  - Maintained complete HUD integrity (`rocky_hud.py` and HUD rendering untouched).
 
 ### Missing / known weak points
 
