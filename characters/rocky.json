@@ -6,8 +6,8 @@
   "wake_words": ["rocky", "hey rocky", "hi rocky", "okay rocky", "ok rocky"],
   "voice": {
     "engine": "kokoro",
-    "name": "bf_emma",
-    "speed": 1.05
+    "name": "af_heart",
+    "speed": 1.0
   },
   "persona": {
     "speech_style": "eridian",

@@ -154,8 +154,10 @@ response_cancel = threading.Event()
 TTS_ENGINE = "kokoro"
 SYSTEM_VOICE = "Samantha"
 SYSTEM_VOICE_RATE = 185
-KOKORO_VOICE = "bf_emma"
+KOKORO_VOICE = "af_heart"
 _KOKORO_PIPELINES = {}
+VOICESTUDIO_URL = os.environ.get("VOICESTUDIO_URL", "http://localhost:8080/v1")
+VOICESTUDIO_VOICE = os.environ.get("VOICESTUDIO_VOICE", "default")
 
 character_registry = CharacterRegistry()
 active_character = character_registry.default()
@@ -390,11 +392,15 @@ class Ears:
             pass
 
     def can_hear(self) -> bool:
-        return (self.enabled and not mic_recording and state in (IDLE, LISTENING)
-                and time.monotonic() >= quiet_until)
+        # Ears can hear during IDLE, LISTENING, or SPEAKING (barge-in interruption)
+        if not self.enabled or mic_recording:
+            return False
+        if state == SPEAKING:
+            return True
+        return state in (IDLE, LISTENING) and time.monotonic() >= quiet_until
 
     def _loop(self) -> None:
-        global state
+        global state, quiet_until
         while True:
             frame = self.frames.get()
             if frame is None:
@@ -404,6 +410,19 @@ class Ears:
                     state = IDLE
                 self.endpointer.reset()
                 continue
+
+            # Real-time barge-in interruption during SPEAKING:
+            # Rocky's speaker output on mic sits around 0.003 - 0.008 RMS.
+            # When the user speaks up over playback, frame RMS exceeds 0.016.
+            if state == SPEAKING:
+                rms = float(np.sqrt(np.mean(np.square(frame)))) if len(frame) else 0.0
+                if rms > 0.016:
+                    response_cancel.set()
+                    quiet_until = 0.0
+                    state = LISTENING
+                    self.endpointer.reset()
+                    continue
+
             event = self.endpointer.push(frame)
             if event is None:
                 continue
@@ -590,7 +609,27 @@ class Transcriber:
 # --- pipeline -----------------------------------------------------------
 def synthesize(text: str):
     global _KOKORO_PIPELINES
-    if TTS_ENGINE == "kokoro":
+    if TTS_ENGINE in ("voicestudio", "openai"):
+        try:
+            url = f"{VOICESTUDIO_URL.rstrip('/')}/audio/speech"
+            headers = {"Content-Type": "application/json"}
+            api_key = os.environ.get("VOICESTUDIO_API_KEY", "")
+            if api_key:
+                headers["Authorization"] = f"Bearer {api_key}"
+            payload = json.dumps({
+                "model": "tts-1",
+                "voice": VOICESTUDIO_VOICE,
+                "input": text,
+                "response_format": "wav",
+                "speed": getattr(active_character, "speed", 1.0)
+            }).encode("utf-8")
+            req = urllib.request.Request(url, data=payload, headers=headers)
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                return text, resp.read()
+        except Exception as e:
+            print(f"[voicestudio] local server at {VOICESTUDIO_URL} unreachable ({e}), falling back to Kokoro", file=sys.stderr)
+
+    if TTS_ENGINE == "kokoro" or TTS_ENGINE in ("voicestudio", "openai"):
         # American voices start with "a", British voices start with "b"
         lang = "a" if KOKORO_VOICE.startswith("a") else "b"
         if lang not in _KOKORO_PIPELINES:
@@ -1327,8 +1366,10 @@ def main() -> None:
                     help="tiny.en / base.en / small.en")
     ap.add_argument("--end-silence-ms", type=int, default=700, metavar="MS",
                     help="quiet time before hands-free utterances end (200-2000; default 700)")
-    ap.add_argument("--tts-engine", choices=["kokoro", "macos"], default="kokoro",
-                    help="local speech voice: British Kokoro (default) or macOS system voice")
+    ap.add_argument("--tts-engine", choices=["kokoro", "voicestudio", "macos"], default="kokoro",
+                    help="speech engine: Kokoro (default), VoiceStudio / OpenAI local API, or macOS voice")
+    ap.add_argument("--voicestudio-url", default="http://localhost:8080/v1",
+                    help="VoiceStudio or OpenAI-compatible local TTS endpoint (default http://localhost:8080/v1)")
     ap.add_argument("--system-voice", default="Samantha",
                     help="installed macOS voice name for --tts-engine macos (default Samantha)")
     ap.add_argument("--kokoro-voice", default="bf_emma",
@@ -1354,7 +1395,11 @@ def main() -> None:
         TTS_ENGINE, SYSTEM_VOICE, KOKORO_VOICE = (
             args.tts_engine, args.system_voice, args.kokoro_voice
         )
+    if hasattr(args, "voicestudio_url") and args.voicestudio_url:
+        global VOICESTUDIO_URL
+        VOICESTUDIO_URL = args.voicestudio_url
     selected_voice = (f" ({KOKORO_VOICE})" if TTS_ENGINE == "kokoro" else
+                      f" ({VOICESTUDIO_URL})" if TTS_ENGINE == "voicestudio" else
                       f" ({SYSTEM_VOICE})" if TTS_ENGINE == "macos" else "")
     print(f"[voice] {TTS_ENGINE}{selected_voice}", file=sys.stderr)
 
