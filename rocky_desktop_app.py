@@ -94,7 +94,7 @@ WARN   = (255, 190, 100)  # Updated color: Warnings and alerts
 REC    = (255, 100, 100)  # Updated color: Recording indicator
 ACCENT = (70, 230, 255)   # Updated color: Accent highlights
 OK     = (120, 245, 180)  # Updated color: Status indicators
-FPS    = 60
+FPS    = 30
 FONT_NAME = "menlo,monospace"
 HINT = "F1 hold-talk  F2 talk  F3 look  F4 hands-free  F5 watch  Esc"
 
@@ -566,7 +566,7 @@ class Transcriber:
         if self.model is None:
             from faster_whisper import WhisperModel
             print(f"[stt] loading faster-whisper {self.size}...", file=sys.stderr)
-            self.model = WhisperModel(self.size, device="cpu", compute_type="int8")
+            self.model = WhisperModel(self.size, device="cpu", compute_type="int8", cpu_threads=2)
         return self.model
 
     def warm(self) -> None:
