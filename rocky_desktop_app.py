@@ -294,7 +294,7 @@ class Endpointer:
         self.pre: collections.deque = collections.deque(maxlen=self.preroll)
 
     def threshold(self) -> float:
-        return max(0.012, self.noise * 3.5)
+        return max(0.003, self.noise * 2.5)
 
     def push(self, frame: np.ndarray):
         """Feed one frame. Returns ("start"|"end"|"drop", audio-or-None) or None."""
@@ -576,7 +576,7 @@ class Transcriber:
     def transcribe(self, audio: np.ndarray) -> str:
         if audio is None or len(audio) < 1600:
             return ""
-        if float(np.abs(audio).max()) < 0.008:
+        if float(np.abs(audio).max()) < 0.002:
             return ""
         segments, _ = self._load().transcribe(audio, language="en", beam_size=1,
                                               vad_filter=True, condition_on_previous_text=False)
