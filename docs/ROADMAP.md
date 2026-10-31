@@ -17,7 +17,7 @@ Status: in progress. Items are not implemented unless checked.
   2026-10-22). The outside-app survey is in
   [`OPEN_SOURCE_OPTIONS.md`](OPEN_SOURCE_OPTIONS.md) for reference.
 - [x] Senses in the app: hearing (hands-free, "hey Rocky") and sight (webcam).
-- [ ] Verify hearing and sight on the Mac (see `AGENTS.md`).
+- [x] Verify hearing and sight on the Mac (see `AGENTS.md`).
 - [ ] Add latency marks: speech-end, STT-final, LLM-first-token,
   TTS-first-byte, first-audio-played, barge-in-stop.
 - [ ] Write a JSONL trace per turn; compute p50/p95 over 20 turns.
